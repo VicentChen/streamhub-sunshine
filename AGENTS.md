@@ -1,3 +1,12 @@
+# StreamHub fork boundaries
+
+- This fork provides Moonlight pairing, sessions, transport, and the StreamHub protocol adapter.
+- Keep hardware capture, hardware encoding policy, console-specific behavior, and ESP32 control in the independent StreamHub software or firmware.
+- Communicate through the public StreamHub protocol; keep conversions to Sunshine internal types inside this repository.
+- Preserve Sunshine's GPL license and third-party notices; do not move GPL implementation code into the MIT protocol library or the independent StreamHub software.
+
+## Upstream development guidance
+
 On Windows we use msys2 and ucrt64 to compile.
 You need to prefix commands with `C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c`.
 
