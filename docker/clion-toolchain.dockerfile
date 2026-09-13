@@ -29,66 +29,24 @@ apt-get install -y --no-install-recommends \
   gdb \
   git \
   graphviz \
-  libcap-dev \
   libcurl4-openssl-dev \
-  libdrm-dev \
-  libevdev-dev \
-  libgbm-dev \
+  libglib2.0-dev \
   libminiupnpc-dev \
-  libnuma-dev \
   libopus-dev \
-  libpulse-dev \
   libssl-dev \
-  libva-dev \
-  libwayland-dev \
-  libx11-dev \
-  libxcb-shm0-dev \
-  libxcb-xfixes0-dev \
-  libxcb1-dev \
-  libxfixes-dev \
-  libxrandr-dev \
-  libxtst-dev \
   npm \
-  qt6-base-dev \
-  qt6-svg-dev \
-  udev \
-  wget \
-  x11-xserver-utils \
-  xvfb
+  wget
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 _DEPS
 
-# install cuda
-WORKDIR /build/cuda
-# versions: https://developer.nvidia.com/cuda-toolkit-archive
-ENV CUDA_VERSION="12.9.1"
-ENV CUDA_BUILD="575.57.08"
-RUN <<_INSTALL_CUDA
-#!/bin/bash
-set -e
-cuda_prefix="https://developer.download.nvidia.com/compute/cuda/"
-cuda_suffix=""
-if [ "${TARGETPLATFORM}" = 'linux/arm64' ]; then
-  cuda_suffix="_sbsa"
-fi
-url="${cuda_prefix}${CUDA_VERSION}/local_installers/cuda_${CUDA_VERSION}_${CUDA_BUILD}_linux${cuda_suffix}.run"
-echo "cuda url: ${url}"
-tmpfile="/tmp/cuda.run"
-wget "$url" --max-redirect=0 --progress=bar:force:noscroll --show-progress -O "$tmpfile"
-chmod a+x "${tmpfile}"
-"${tmpfile}" --silent --toolkit --toolkitpath=/usr/local --no-opengl-libs --no-man-page --no-drm
-rm -f "${tmpfile}"
-_INSTALL_CUDA
 
 WORKDIR /toolchain
-# Create a shell script that starts Xvfb and then runs a shell
 RUN <<_ENTRYPOINT
 #!/bin/bash
 set -e
 cat <<EOF > entrypoint.sh
 #!/bin/bash
-Xvfb ${DISPLAY} -screen 0 1024x768x24 &
 if [ "\$#" -eq 0 ]; then
   exec "/bin/bash"
 else

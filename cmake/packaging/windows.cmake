@@ -4,15 +4,6 @@ install(TARGETS sunshine RUNTIME DESTINATION "." COMPONENT application)
 # Hardening: include zlib1.dll (loaded via LoadLibrary() in openssl's libcrypto.a)
 install(FILES "${ZLIB}" DESTINATION "." COMPONENT application)
 
-# ARM64: include minhook-detours DLL (shared library for ARM64)
-if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64" AND DEFINED _MINHOOK_DLL)
-    install(FILES "${_MINHOOK_DLL}" DESTINATION "." COMPONENT application)
-endif()
-
-# Adding tools
-install(TARGETS dxgi-info RUNTIME DESTINATION "tools" COMPONENT dxgi)
-install(TARGETS audio-info RUNTIME DESTINATION "tools" COMPONENT audio)
-
 # Mandatory tools
 install(TARGETS sunshinesvc RUNTIME DESTINATION "tools" COMPONENT application)
 
@@ -49,12 +40,6 @@ install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/assets/"
 file(COPY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/assets/"
         DESTINATION "${CMAKE_BINARY_DIR}/assets"
         PATTERN "shaders" EXCLUDE)
-# use junction for shaders directory
-cmake_path(CONVERT "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/assets/shaders"
-        TO_NATIVE_PATH_LIST shaders_in_build_src_native)
-cmake_path(CONVERT "${CMAKE_BINARY_DIR}/assets/shaders" TO_NATIVE_PATH_LIST shaders_in_build_dest_native)
-execute_process(COMMAND cmd.exe /c mklink /J "${shaders_in_build_dest_native}" "${shaders_in_build_src_native}")
-
 set(CPACK_PACKAGE_ICON "${CMAKE_SOURCE_DIR}\\\\sunshine.ico")
 
 # The name of the directory that will be created in C:/Program files/
@@ -77,19 +62,9 @@ set(CPACK_COMPONENT_AUTOSTART_GROUP "Core")
 
 # assets
 set(CPACK_COMPONENT_ASSETS_DISPLAY_NAME "Required Assets")
-set(CPACK_COMPONENT_ASSETS_DESCRIPTION "Shaders, default box art, and web UI.")
+set(CPACK_COMPONENT_ASSETS_DESCRIPTION "Default box art and web UI.")
 set(CPACK_COMPONENT_ASSETS_GROUP "Core")
 set(CPACK_COMPONENT_ASSETS_REQUIRED true)
-
-# audio tool
-set(CPACK_COMPONENT_AUDIO_DISPLAY_NAME "audio-info")
-set(CPACK_COMPONENT_AUDIO_DESCRIPTION "CLI tool providing information about sound devices.")
-set(CPACK_COMPONENT_AUDIO_GROUP "Tools")
-
-# display tool
-set(CPACK_COMPONENT_DXGI_DISPLAY_NAME "dxgi-info")
-set(CPACK_COMPONENT_DXGI_DESCRIPTION "CLI tool providing information about graphics cards and displays.")
-set(CPACK_COMPONENT_DXGI_GROUP "Tools")
 
 # firewall scripts
 set(CPACK_COMPONENT_FIREWALL_DISPLAY_NAME "Add Firewall Exclusions")

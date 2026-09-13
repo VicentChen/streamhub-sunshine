@@ -272,3 +272,66 @@ TEST_F(ProcessPNGTest, ValidateAppImagePath_OldSteamDefault) {
   const std::string result = proc::validate_app_image_path("./assets/steam.png");
   EXPECT_EQ(result, SUNSHINE_ASSETS_DIR "/steam.png");
 }
+
+/** @brief Metadata parsing and session selection must not execute legacy commands. */
+TEST_F(ProcessPNGTest, LegacyCommandsAreIgnoredDuringSessionLifecycle) {
+  const auto marker = test_dir / "must-not-exist";
+  const auto config_file = test_dir / "apps.json";
+  std::ofstream config(config_file);
+  config << R"APP({"env":{"NAME":"expanded"},"apps":[{"name":"$(NAME)","cmd":"touch )APP"
+         << marker.string()
+         << R"(","prep-cmd":[{"do":"touch )" << marker.string()
+         << R"(","undo":"touch )" << marker.string()
+         << R"("}],"detached":["touch )" << marker.string()
+         << R"("],"elevated":true,"exit-timeout":600}]})";
+  config.close();
+
+  auto registry = proc::parse(config_file.string());
+  ASSERT_TRUE(registry);
+  ASSERT_EQ(registry->get_apps().size(), 1);
+  EXPECT_EQ(registry->get_apps()[0].name, "$(NAME)");
+  EXPECT_EQ(registry->running(), 0);
+  const int id = std::stoi(registry->get_apps()[0].id);
+  EXPECT_EQ(registry->activate(id), 0);
+  EXPECT_EQ(registry->running(), id);
+  EXPECT_FALSE(fs::exists(marker));
+  registry->terminate();
+  EXPECT_EQ(registry->running(), 0);
+  EXPECT_FALSE(fs::exists(marker));
+}
+
+/** @brief An unknown application must not replace the selected application. */
+TEST_F(ProcessPNGTest, UnknownApplicationDoesNotChangeSelection) {
+  proc::proc_t registry(std::vector<proc::ctx_t> {{"One", "", "1"}, {"Two", "", "2"}});
+  EXPECT_EQ(registry.activate(99), 404);
+  EXPECT_EQ(registry.running(), 0);
+  EXPECT_EQ(registry.activate(1), 0);
+  EXPECT_EQ(registry.activate(99), 404);
+  EXPECT_EQ(registry.running(), 1);
+  EXPECT_EQ(registry.activate(2), 0);
+  EXPECT_EQ(registry.running(), 2);
+  registry.terminate();
+  registry.terminate();
+  EXPECT_EQ(registry.running(), 0);
+}
+
+/** @brief Metadata-only files retain the existing name-based stable IDs. */
+TEST_F(ProcessPNGTest, MetadataWithoutEnvironmentHasStableIds) {
+  const auto config_file = test_dir / "apps.json";
+  std::ofstream(config_file) << R"({"apps":[{"name":"One"},{"name":"One"}]})";
+  auto registry = proc::parse(config_file.string());
+  ASSERT_TRUE(registry);
+  ASSERT_EQ(registry->get_apps().size(), 2);
+  EXPECT_EQ(registry->get_apps()[0].id, std::get<0>(proc::calculate_app_id("One", "", 0)));
+  EXPECT_EQ(registry->get_apps()[1].id, std::get<1>(proc::calculate_app_id("One", "", 1)));
+  EXPECT_NE(registry->get_apps()[0].id, registry->get_apps()[1].id);
+}
+
+/** @brief Invalid metadata remains an error instead of an empty successful parse. */
+TEST_F(ProcessPNGTest, InvalidApplicationMetadataFailsParsing) {
+  const auto config_file = test_dir / "apps.json";
+  std::ofstream(config_file) << R"({"apps":[{}]})";
+  EXPECT_FALSE(proc::parse(config_file.string()));
+  std::ofstream(config_file) << "{";
+  EXPECT_FALSE(proc::parse(config_file.string()));
+}

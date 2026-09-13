@@ -1,24 +1,15 @@
 cmake_minimum_required(VERSION 3.24)
-# `CMAKE_CUDA_ARCHITECTURES` requires 3.18
 # `set_source_files_properties` requires 3.18
 # `cmake_path(CONVERT ... TO_NATIVE_PATH_LIST ...)` requires 3.20
-# `third-party/libvirtualhid` requires 3.24
 # todo - set this conditionally
 
 project(Sunshine VERSION 0.0.0
         DESCRIPTION "Self-hosted game stream host for Moonlight"
         HOMEPAGE_URL "https://app.lizardbyte.dev/Sunshine")
 
-# Minimum separately installed Virtual HID Driver version supported by this build.
-set(LIBVIRTUALHID_MINIMUM_VERSION "2026.905.2300.20")
-list(APPEND SUNSHINE_DEFINITIONS LIBVIRTUALHID_MINIMUM_VERSION="${LIBVIRTUALHID_MINIMUM_VERSION}")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-if(NOT DEFINED CMAKE_CUDA_STANDARD)
-    set(CMAKE_CUDA_STANDARD 17)
-    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-endif()
 
 set(PROJECT_LICENSE "GPL-3.0-only")
 
@@ -26,10 +17,7 @@ set(PROJECT_FQDN "dev.lizardbyte.app.Sunshine")
 
 set(PROJECT_BRIEF_DESCRIPTION "GameStream host for Moonlight")  # must be <= 35 characters
 
-set(PROJECT_LONG_DESCRIPTION "Offering low latency, cloud gaming server capabilities with support for AMD, Intel, \
-and Nvidia GPUs for hardware encoding. Software encoding is also available. You can connect to Sunshine from any \
-Moonlight client on a variety of devices. A web UI is provided to allow configuration, and client pairing, from \
-your favorite web browser. Pair from the local server or any mobile device.")
+set(PROJECT_LONG_DESCRIPTION "Moonlight protocol core for StreamHub, with pairing, sessions and media transport.")
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     message(STATUS "Setting build type to 'Release' as none was specified.")
@@ -55,7 +43,6 @@ include(${CMAKE_MODULE_PATH}/prep/build_version.cmake)
 
 # cmake build flags
 include(${CMAKE_MODULE_PATH}/prep/options.cmake)
-include(${CMAKE_MODULE_PATH}/prep/static_qt.cmake)
 
 # initial prep
 include(${CMAKE_MODULE_PATH}/prep/init.cmake)

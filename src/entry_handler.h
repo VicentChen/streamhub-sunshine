@@ -13,16 +13,6 @@
 #include "thread_safe.h"
 
 /**
- * @brief Launch the Web UI.
- * @param path Optional path to append to the base URL.
- * @examples
- * launch_ui();
- * launch_ui("/pin");
- * @examples_end
- */
-void launch_ui(const std::optional<std::string> &path = std::nullopt);
-
-/**
  * @brief Functions for handling command line arguments.
  */
 namespace args {
@@ -61,18 +51,7 @@ namespace args {
   int version();
 
 #ifdef _WIN32
-  /**
-   * @brief Restore global NVIDIA control panel settings.
-   * If Sunshine was improperly terminated, this function restores
-   * the global NVIDIA control panel settings to the undo file left
-   * by Sunshine. This function is typically called by the uninstaller.
-   * @examples
-   * restore_nvprefs_undo();
-   * @examples_end
-   *
-   * @return Process exit code from restoring NVIDIA profile preferences.
-   */
-  int restore_nvprefs_undo();
+
 #endif
 }  // namespace args
 

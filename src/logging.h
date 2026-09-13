@@ -117,18 +117,6 @@ namespace logging {
   [[nodiscard]] std::unique_ptr<deinit_t> init(int min_log_level, const std::string &log_file);
 
   /**
-   * @brief Setup AV logging.
-   * @param min_log_level The log level.
-   */
-  void setup_av_logging(int min_log_level);
-
-  /**
-   * @brief Setup logging for libdisplaydevice.
-   * @param min_log_level The log level.
-   */
-  void setup_libdisplaydevice_logging(int min_log_level);
-
-  /**
    * @brief Flush the log.
    * @examples
    * log_flush();

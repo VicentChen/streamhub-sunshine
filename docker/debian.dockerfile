@@ -7,15 +7,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 FROM sunshine-base AS sunshine-deps
 
-ARG CUDA_PATCHES=false
 ARG UBUNTU_TEST_REPO=false
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Copy only the build script and conditional patches first for better layer caching
+# Copy only the build script first for better layer caching
 WORKDIR /build/sunshine/
 COPY --link scripts/linux_build.sh ./scripts/linux_build.sh
-COPY --link packaging/linux/patches/ ./packaging/linux/patches/
 
 # Install dependencies first - this layer will be cached
 RUN <<_DEPS
@@ -24,9 +22,6 @@ set -e
 chmod +x ./scripts/linux_build.sh
 
 dependency_options=()
-if [[ "${CUDA_PATCHES}" == "true" ]]; then
-  dependency_options+=(--cuda-patches)
-fi
 if [[ "${UBUNTU_TEST_REPO}" == "true" ]]; then
   dependency_options+=(--ubuntu-test-repo)
 fi
@@ -85,8 +80,6 @@ WORKDIR /build/sunshine/build/tests
 RUN <<_TEST
 #!/bin/bash
 set -e
-export DISPLAY=:1
-Xvfb "${DISPLAY}" -screen 0 1024x768x24 &
 ./test_sunshine --gtest_color=yes
 _TEST
 

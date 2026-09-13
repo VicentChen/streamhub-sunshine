@@ -28,7 +28,6 @@
 #include <Simple-Web-Server/server_https.hpp>
 
 #ifdef _WIN32
-  #include "platform/virtualhid_input.h"
   #include "platform/windows/misc.h"
   #include "platform/windows/utf_utils.h"
 
@@ -39,7 +38,6 @@
 #include "config.h"
 #include "confighttp.h"
 #include "crypto.h"
-#include "display_device.h"
 #include "file_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
@@ -50,7 +48,6 @@
 #include "platform/common.h"
 #include "process.h"
 #include "rtsp.h"
-#include "system_tray.h"
 #include "utility.h"
 #include "uuid.h"
 
@@ -81,28 +78,6 @@ namespace confighttp {
    */
   using https_handler_t = std::function<void(resp_https_t, req_https_t)>;
 
-  namespace {
-    using license_status_provider_t = std::function<lvh::LicenseResult()>;  ///< Provider for the current libvirtualhid license status.
-
-    /**
-     * @brief Return the current libvirtualhid license status provider.
-     *
-     * Unit-test builds expose a mutable provider so the HTTP fixture can avoid
-     * contacting an installed Windows broker. Production builds keep the
-     * provider const and always call libvirtualhid directly.
-     *
-     * @return License status provider for the current build.
-     */
-    auto &virtual_input_license_status_provider() {
-#ifdef SUNSHINE_TESTS
-      static license_status_provider_t status_provider = lvh::get_license_status;
-#else
-      static const license_status_provider_t status_provider = lvh::get_license_status;
-#endif
-      return status_provider;
-    }
-  }  // namespace
-
   /**
    * @brief Client certificate operations accepted by the configuration API.
    */
@@ -110,48 +85,6 @@ namespace confighttp {
     ADD,  ///< Add client
     REMOVE  ///< Remove client
   };
-
-  /**
-   * @brief Overwrite a request-local sensitive string when leaving scope.
-   */
-  class scoped_sensitive_string_clear_t {
-  public:
-    /**
-     * @brief Register a sensitive string for best-effort clearing.
-     *
-     * @param value Mutable sensitive string.
-     */
-    explicit scoped_sensitive_string_clear_t(std::string &value):
-        value_ {value} {}
-
-    scoped_sensitive_string_clear_t(const scoped_sensitive_string_clear_t &) = delete;
-    scoped_sensitive_string_clear_t &operator=(const scoped_sensitive_string_clear_t &) = delete;
-
-    /**
-     * @brief Overwrite and clear the registered string.
-     */
-    ~scoped_sensitive_string_clear_t() {
-      std::fill(value_.begin(), value_.end(), '\0');
-      value_.clear();
-    }
-
-  private:
-    std::string &value_;  ///< Sensitive request-local string.
-  };
-
-#ifdef SUNSHINE_TESTS
-  void set_virtual_input_license_status_provider_for_testing(virtual_input_license_status_provider_t status_provider) {
-    virtual_input_license_status_provider() = std::move(status_provider);
-  }
-
-  void reset_virtual_input_license_status_provider_for_testing() {
-    virtual_input_license_status_provider() = lvh::get_license_status;
-  }
-
-  void clear_sensitive_string_for_testing(std::string &value) {
-    const scoped_sensitive_string_clear_t clear_value {value};
-  }
-#endif
 
   // CSRF token management
   /**
@@ -175,311 +108,6 @@ namespace confighttp {
    */
   constexpr auto CSRF_TOKEN_LIFETIME = std::chrono::hours(1);  // Tokens valid for 1 hour
 
-  constexpr std::string_view libvirtualhid_minimum_version = LIBVIRTUALHID_MINIMUM_VERSION;  ///< Minimum supported libvirtualhid driver version.
-  constexpr auto VIGEMBUS_MINIMUM_VERSION = "1.17.0.0"sv;  ///< Minimum supported ViGEmBus fallback driver version.  // NOSONAR(cpp:S1313): not an IP address
-
-  /**
-   * @brief Parse one dotted driver-version component.
-   *
-   * @param part Version component text.
-   * @return Parsed component value, or empty when invalid.
-   */
-  std::optional<unsigned int> parse_driver_version_part(std::string_view part) {
-    if (part.empty()) {
-      return std::nullopt;
-    }
-
-    unsigned int value = 0;
-    const auto *begin = part.data();
-    const auto *end = part.data() + part.size();
-    const auto [ptr, ec] = std::from_chars(begin, end, value);
-    if (ec != std::errc {} || ptr != end) {
-      return std::nullopt;
-    }
-
-    return value;
-  }
-
-  /**
-   * @brief Parse a dotted driver version into numeric components.
-   *
-   * @param version Driver version text.
-   * @return Parsed version parts, or empty when invalid.
-   */
-  std::optional<std::vector<unsigned int>> parse_driver_version(std::string_view version) {
-    if (version.empty()) {
-      return std::nullopt;
-    }
-
-    std::vector<unsigned int> parts;
-    std::size_t start = 0;
-    while (start <= version.size()) {
-      const auto dot = version.find('.', start);
-      const auto length = dot == std::string_view::npos ? std::string_view::npos : dot - start;
-      const auto part = parse_driver_version_part(version.substr(start, length));
-      if (!part.has_value()) {
-        return std::nullopt;
-      }
-
-      parts.push_back(*part);
-      if (dot == std::string_view::npos) {
-        break;
-      }
-      start = dot + 1;
-    }
-
-    return parts;
-  }
-
-  bool is_driver_version_development(std::string_view version) {
-    const auto version_parts = parse_driver_version(version);
-    return version_parts && version_parts->size() >= 3U && (*version_parts)[0] == 0U && (*version_parts)[1] == 0U;
-  }
-
-  bool is_driver_version_supported(std::string_view version, std::string_view minimum_version) {
-    if (minimum_version.empty() || is_driver_version_development(version)) {
-      return true;
-    }
-
-    const auto version_parts = parse_driver_version(version);
-    const auto minimum_parts = parse_driver_version(minimum_version);
-    if (!version_parts || !minimum_parts) {
-      return false;
-    }
-
-    const auto part_count = std::max(version_parts->size(), minimum_parts->size());
-    for (std::size_t i = 0; i < part_count; ++i) {
-      const auto version_part = i < version_parts->size() ? (*version_parts)[i] : 0U;
-      const auto minimum_part = i < minimum_parts->size() ? (*minimum_parts)[i] : 0U;
-      if (version_part != minimum_part) {
-        return version_part > minimum_part;
-      }
-    }
-
-    return true;
-  }
-
-  nlohmann::json build_driver_status(bool installed, const std::string &version, std::string_view minimum_version) {
-    const auto minimum_version_text = std::string {minimum_version};
-
-    nlohmann::json output_tree;
-    output_tree["installed"] = installed;
-    output_tree["version"] = version;
-    output_tree["minimum_version"] = minimum_version_text;
-    output_tree["supported_versions"] = minimum_version.empty() ? "Any" : std::format(">= {}", minimum_version_text);
-    output_tree["development_version"] = installed && is_driver_version_development(version);
-    output_tree["version_compatible"] = installed && is_driver_version_supported(version, minimum_version);
-
-    return output_tree;
-  }
-
-  /**
-   * @brief Return a stable Web UI name for a libvirtualhid license state.
-   *
-   * @param state License state.
-   * @return Lowercase state name.
-   */
-  std::string_view virtualhid_license_state_name(lvh::LicenseState state) {
-    using enum lvh::LicenseState;
-
-    switch (state) {
-      case unlicensed:
-        return "unlicensed";
-      case licensed:
-        return "licensed";
-      case expired:
-        return "expired";
-      case disabled:
-        return "disabled";
-      case invalid:
-        return "invalid";
-      case unavailable:
-      default:
-        return "unavailable";
-    }
-  }
-
-  nlohmann::json build_virtualhid_license_status(const lvh::LicenseResult &result) {
-    const auto &license = result.license;
-    nlohmann::json output_tree;
-    output_tree["operation_ok"] = result.status.ok();
-    output_tree["service_available"] = license.service_available;
-    output_tree["state"] = virtualhid_license_state_name(license.state);
-    output_tree["licensed"] = license.licensed();
-    output_tree["active_devices"] = license.active_devices;
-    output_tree["activation_limit"] = license.activation_limit;
-    output_tree["activation_usage"] = license.activation_usage;
-    output_tree["plan_name"] = license.plan_name;
-    output_tree["customer_email"] = license.customer_email;
-    output_tree["message"] = license.message;
-    output_tree["purchase_url"] = license.purchase_url;
-    output_tree["manage_account_url"] = license.manage_account_url;
-    output_tree["error"] = result.status.ok() ? "" : result.status.message();
-    return output_tree;
-  }
-
-  namespace {
-    /**
-     * @brief Handle a virtual-input license request using the configured status provider.
-     *
-     * @param response HTTP response object.
-     * @param request Authenticated HTTP request.
-     */
-    void get_virtual_input_license(const resp_https_t &response, const req_https_t &request) {
-      if (!authenticate(response, request)) {
-        return;
-      }
-
-      print_req(request);
-      send_response(response, build_virtualhid_license_status(virtual_input_license_status_provider()()));
-    }
-  }  // namespace
-
-#ifdef _WIN32
-  /**
-   * @brief RAII wrapper for a Windows registry key handle.
-   */
-  class registry_key_t {
-  public:
-    /**
-     * @brief Construct an empty registry key wrapper.
-     */
-    registry_key_t() = default;
-
-    /**
-     * @brief Copy construction is disabled because the wrapper owns a handle.
-     */
-    registry_key_t(const registry_key_t &) = delete;
-
-    /**
-     * @brief Copy assignment is disabled because the wrapper owns a handle.
-     *
-     * @return This registry key wrapper.
-     */
-    registry_key_t &operator=(const registry_key_t &) = delete;
-
-    /**
-     * @brief Close the owned registry key handle.
-     */
-    ~registry_key_t() {
-      close();
-    }
-
-    /**
-     * @brief Get the owned registry key handle.
-     *
-     * @return Registry key handle.
-     */
-    HKEY get() const {
-      return handle;
-    }
-
-    /**
-     * @brief Prepare the wrapper to receive a registry key handle.
-     *
-     * @return Address of the wrapped handle.
-     */
-    HKEY *put() {
-      close();
-      return &handle;
-    }
-
-  private:
-    /**
-     * @brief Close the owned registry key handle if one is open.
-     */
-    void close() {
-      if (handle) {
-        RegCloseKey(handle);
-        handle = nullptr;
-      }
-    }
-
-    HKEY handle = nullptr;  ///< Owned Windows registry key handle.
-  };
-
-  /**
-   * @brief Read a string value from a Windows registry key.
-   *
-   * @param key Registry key to query.
-   * @param value_name Registry value name.
-   * @return Registry string value, or empty when unavailable.
-   */
-  std::optional<std::wstring> read_registry_string_value(HKEY key, const wchar_t *value_name) {
-    DWORD value_type = 0;
-    DWORD value_size = 0;
-    if (RegGetValueW(key, nullptr, value_name, RRF_RT_REG_SZ, &value_type, nullptr, &value_size) != ERROR_SUCCESS || value_size == 0) {
-      return std::nullopt;
-    }
-
-    std::wstring value(value_size / sizeof(wchar_t), L'\0');
-    if (RegGetValueW(key, nullptr, value_name, RRF_RT_REG_SZ, &value_type, value.data(), &value_size) != ERROR_SUCCESS) {
-      return std::nullopt;
-    }
-
-    while (!value.empty() && value.back() == L'\0') {
-      value.pop_back();
-    }
-    return value;
-  }
-
-  /**
-   * @brief Read the installed libvirtualhid driver version from the Windows device registry.
-   *
-   * @return Driver version string, or empty when unavailable.
-   */
-  std::string read_libvirtualhid_driver_version() {
-    registry_key_t root_key;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Enum\\ROOT\\LIBVIRTUALHID", 0, KEY_READ, root_key.put()) != ERROR_SUCCESS) {
-      return {};
-    }
-
-    for (DWORD index = 0;; ++index) {
-      std::wstring subkey_name(256, L'\0');
-      auto subkey_name_size = static_cast<DWORD>(subkey_name.size());
-      const auto enum_status = RegEnumKeyExW(root_key.get(), index, subkey_name.data(), &subkey_name_size, nullptr, nullptr, nullptr, nullptr);
-      if (enum_status == ERROR_NO_MORE_ITEMS) {
-        break;
-      }
-      if (enum_status != ERROR_SUCCESS) {
-        continue;
-      }
-
-      std::wstring device_key_path = L"SYSTEM\\CurrentControlSet\\Enum\\ROOT\\LIBVIRTUALHID\\";
-      device_key_path.append(subkey_name, 0, subkey_name_size);
-
-      registry_key_t device_key;
-      if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, device_key_path.c_str(), 0, KEY_READ, device_key.put()) != ERROR_SUCCESS) {
-        continue;
-      }
-
-      const auto driver_key_suffix = read_registry_string_value(device_key.get(), L"Driver");
-      if (!driver_key_suffix) {
-        continue;
-      }
-
-      std::wstring driver_key_path = L"SYSTEM\\CurrentControlSet\\Control\\Class\\";
-      driver_key_path += *driver_key_suffix;
-
-      registry_key_t driver_key;
-      if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, driver_key_path.c_str(), 0, KEY_READ, driver_key.put()) != ERROR_SUCCESS) {
-        continue;
-      }
-
-      if (const auto version = read_registry_string_value(driver_key.get(), L"DriverVersion")) {
-        return utf_utils::to_utf8(*version);
-      }
-    }
-
-    return {};
-  }
-
-#endif
-
-  /**
-   * @brief Log the request details.
-   * @param request The HTTP request object.
-   */
   void print_req(const req_https_t &request) {
     BOOST_LOG(debug) << "METHOD :: "sv << request->method;
     BOOST_LOG(debug) << "DESTINATION :: "sv << request->path;
@@ -1000,40 +628,10 @@ namespace confighttp {
       std::string content = file_handler::read_file(config::stream.file_apps.c_str());
       nlohmann::json file_tree = nlohmann::json::parse(content);
 
-      // Legacy versions of Sunshine used strings for boolean and integers, let's convert them
-      // List of keys to convert to boolean
-      const std::vector<std::string> boolean_keys = {
-        "exclude-global-prep-cmd",
-        "elevated",
-        "auto-detach",
-        "wait-all"
-      };
-
-      // List of keys to convert to integers
-      std::vector<std::string> integer_keys = {
-        "exit-timeout"
-      };
-
-      // Walk fileTree and convert true/false strings to boolean or integer values
       for (auto &app : file_tree["apps"]) {
-        for (const auto &key : boolean_keys) {
-          if (app.contains(key) && app[key].is_string()) {
-            app[key] = app[key] == "true";
-          }
-        }
-        for (const auto &key : integer_keys) {
-          if (app.contains(key) && app[key].is_string()) {
-            app[key] = std::stoi(app[key].get<std::string>());
-          }
-        }
-        if (app.contains("prep-cmd")) {
-          for (auto &prep : app["prep-cmd"]) {
-            if (prep.contains("elevated") && prep["elevated"].is_string()) {
-              prep["elevated"] = prep["elevated"] == "true";
-            }
-          }
-        }
+        app = {{"name", app.at("name")}, {"image-path", app.value("image-path", std::string {})}};
       }
+      file_tree.erase("env");
 
       send_response(response, file_tree);
     } catch (std::exception &e) {
@@ -1050,24 +648,7 @@ namespace confighttp {
    * @code{.json}
    * {
    *   "name": "Application Name",
-   *   "output": "Log Output Path",
-   *   "cmd": "Command to run the application",
    *   "index": -1,
-   *   "exclude-global-prep-cmd": false,
-   *   "elevated": false,
-   *   "auto-detach": true,
-   *   "wait-all": true,
-   *   "exit-timeout": 5,
-   *   "prep-cmd": [
-   *     {
-   *       "do": "Command to prepare",
-   *       "undo": "Command to undo preparation",
-   *       "elevated": false
-   *     }
-   *   ],
-   *   "detached": [
-   *     "Detached command"
-   *   ],
    *   "image-path": "Full path to the application image. Must be a png file."
    * }
    * @endcode
@@ -1099,18 +680,11 @@ namespace confighttp {
       BOOST_LOG(info) << file;
       nlohmann::json file_tree = nlohmann::json::parse(file);
 
-      if (input_tree["prep-cmd"].empty()) {
-        input_tree.erase("prep-cmd");
-      }
-
-      if (input_tree["detached"].empty()) {
-        input_tree.erase("detached");
-      }
-
       auto &apps_node = file_tree["apps"];
       int index = input_tree["index"].get<int>();  // this will intentionally cause an exception if the provided value is the wrong type
 
-      input_tree.erase("index");
+      input_tree = {{"name", input_tree.at("name")}, {"image-path", input_tree.value("image-path", std::string {})}};
+      file_tree.erase("env");
 
       if (index == -1) {
         apps_node.push_back(input_tree);
@@ -1832,30 +1406,6 @@ namespace confighttp {
   }
 
   /**
-   * @brief Reset the display device persistence.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   *
-   * @api_examples{/api/reset-display-device-persistence| POST| null}
-   */
-  void resetDisplayDevicePersistence(const resp_https_t &response, const req_https_t &request) {
-    if (!authenticate(response, request)) {
-      return;
-    }
-
-    std::string client_id = get_client_id(request);
-    if (!validate_csrf_token(response, request, client_id)) {
-      return;
-    }
-
-    print_req(request);
-
-    nlohmann::json output_tree;
-    output_tree["status"] = display_device::reset_persistence();
-    send_response(response, output_tree);
-  }
-
-  /**
    * @brief Authenticate a Web UI request and restart the Sunshine process.
    *
    * @param response HTTP response used for authentication or CSRF failures.
@@ -1877,171 +1427,6 @@ namespace confighttp {
 
     // We may not return from this call
     platf::restart();
-  }
-
-  /**
-   * @brief Build libvirtualhid driver version and installation status.
-   *
-   * @return libvirtualhid driver status JSON.
-   */
-  nlohmann::json get_virtualhid_driver_status() {
-#ifdef _WIN32
-    const auto version_str = read_libvirtualhid_driver_version();
-    const auto driver_detected = !version_str.empty();
-    auto output_tree = build_driver_status(driver_detected, version_str, libvirtualhid_minimum_version);
-    bool requires_installed_driver = true;
-    std::string backend_name;
-    std::string runtime_error_message;
-
-    try {
-      const auto runtime = platf::virtualhid::create_runtime();
-      if (runtime) {
-        const auto &capabilities = runtime->capabilities();
-        backend_name = capabilities.backend_name;
-        requires_installed_driver = capabilities.requires_installed_driver;
-        output_tree = build_driver_status(driver_detected || capabilities.supports_gamepad, version_str, libvirtualhid_minimum_version);
-      }
-    } catch (const std::bad_alloc &exception) {
-      runtime_error_message = exception.what();
-    }
-
-    output_tree["backend_name"] = backend_name;
-    output_tree["requires_installed_driver"] = requires_installed_driver;
-    if (!runtime_error_message.empty()) {
-      output_tree["error"] = runtime_error_message;
-    }
-#else
-    auto output_tree = build_driver_status(false, "", libvirtualhid_minimum_version);
-    output_tree["error"] = "libvirtualhid driver status is only available on Windows";
-    output_tree["backend_name"] = "";
-    output_tree["requires_installed_driver"] = false;
-#endif
-
-    return output_tree;
-  }
-
-  /**
-   * @brief Build ViGEmBus fallback driver version and installation status.
-   *
-   * @return ViGEmBus fallback driver status JSON.
-   */
-  nlohmann::json get_vigembus_driver_status() {
-#ifdef _WIN32
-    std::string version_str;
-
-    // Check if ViGEmBus driver exists
-    std::string system_root;
-    if (!lizardbyte::common::get_env("SystemRoot", system_root)) {
-      system_root = "C:\\Windows";
-    }
-    const std::filesystem::path driver_path = std::filesystem::path(system_root) / "System32" / "drivers" / "ViGEmBus.sys";
-    const auto installed = std::filesystem::exists(driver_path);
-    if (installed) {
-      platf::getFileVersionInfo(driver_path, version_str);
-    }
-
-    auto output_tree = build_driver_status(installed, version_str, VIGEMBUS_MINIMUM_VERSION);
-#else
-    auto output_tree = build_driver_status(false, "", VIGEMBUS_MINIMUM_VERSION);
-    output_tree["error"] = "ViGEmBus is only available on Windows";
-#endif
-
-    return output_tree;
-  }
-
-  /**
-   * @brief Get virtual input driver version and installation status.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   *
-   * @api_examples{/api/virtual-input/status| GET| null}
-   */
-  void getVirtualInputStatus(const resp_https_t &response, const req_https_t &request) {
-    if (!authenticate(response, request)) {
-      return;
-    }
-
-    print_req(request);
-
-    nlohmann::json output_tree;
-    output_tree["virtualhid"] = get_virtualhid_driver_status();
-    output_tree["vigembus"] = get_vigembus_driver_status();
-    send_response(response, output_tree);
-  }
-
-  /**
-   * @brief Get the current libvirtualhid machine license status.
-   *
-   * @param response HTTP response object.
-   * @param request Authenticated HTTP request.
-   *
-   * @api_examples{/api/virtual-input/license| GET| null}
-   */
-  void getVirtualInputLicense(const resp_https_t &response, const req_https_t &request) {
-    get_virtual_input_license(response, request);
-  }
-
-  /**
-   * @brief Activate, validate, or deactivate the libvirtualhid machine license.
-   *
-   * Submitted license keys are used only for the synchronous broker call. They are
-   * never logged or saved in Sunshine's configuration, and extracted mutable copies
-   * are overwritten before the handler returns.
-   *
-   * @param response HTTP response object.
-   * @param request Authenticated HTTP request with a JSON action.
-   *
-   * @api_examples{/api/virtual-input/license| POST| {"action":"validate"}}
-   */
-  void updateVirtualInputLicense(const resp_https_t &response, const req_https_t &request) {
-    if (!authenticate(response, request)) {
-      return;
-    }
-
-    const auto client_id = get_client_id(request);
-    if (!validate_csrf_token(response, request, client_id)) {
-      return;
-    }
-
-    print_req(request);
-    try {
-      std::stringstream content;
-      content << request->content.rdbuf();
-      auto input_tree = nlohmann::json::parse(content);
-      const auto action = input_tree.value("action", "");
-
-      lvh::LicenseResult result;
-      if (action == "activate") {
-        auto license_key = input_tree.value("license_key", "");
-        input_tree["license_key"] = "";
-        if (license_key.empty()) {
-          bad_request(response, request, "License key is required");
-          return;
-        }
-
-        const scoped_sensitive_string_clear_t clear_license_key {license_key};
-        result = lvh::activate_license(license_key);
-      } else if (action == "validate") {
-        result = lvh::validate_license();
-      } else if (action == "deactivate") {
-        result = lvh::deactivate_license();
-      } else {
-        bad_request(response, request, "Unknown license action");
-        return;
-      }
-
-#if defined(_WIN32) && defined(SUNSHINE_TRAY) && SUNSHINE_TRAY >= 1
-      system_tray::update_tray_virtualhid_license(result.license, false);
-#endif
-#ifdef _WIN32
-      if (result.status.ok()) {
-        input::refresh_virtual_input();
-      }
-#endif
-      send_response(response, build_virtualhid_license_status(result));
-    } catch (const nlohmann::json::exception &) {
-      bad_request(response, request, "Invalid license request");
-    }
   }
 
   /**
@@ -2298,11 +1683,7 @@ namespace confighttp {
     server.resource["^/api/pin$"]["GET"] = getPendingPairings;
     server.resource["^/api/pin$"]["POST"] = savePin;
     server.resource["^/api/logs$"]["GET"] = getLogs;
-    server.resource["^/api/reset-display-device-persistence$"]["POST"] = resetDisplayDevicePersistence;
     server.resource["^/api/restart$"]["POST"] = restart;
-    server.resource["^/api/virtual-input/license$"]["GET"] = getVirtualInputLicense;
-    server.resource["^/api/virtual-input/license$"]["POST"] = updateVirtualInputLicense;
-    server.resource["^/api/virtual-input/status$"]["GET"] = getVirtualInputStatus;
 
     // static/dynamic resources
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;

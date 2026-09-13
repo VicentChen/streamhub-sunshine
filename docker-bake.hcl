@@ -45,7 +45,6 @@ target "debian-trixie" {
   inherits = ["_sunshine"]
   args = {
     BASE = "debian"
-    CUDA_PATCHES = "true"
     TAG = "trixie"
   }
   labels = {

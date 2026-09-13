@@ -24,7 +24,6 @@
 
 // local includes
 #include "config.h"
-#include "display_device.h"
 #include "file_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
@@ -34,7 +33,6 @@
 #include "platform/common.h"
 #include "process.h"
 #include "rtsp.h"
-#include "system_tray.h"
 #include "utility.h"
 #include "uuid.h"
 #include "video.h"
@@ -462,11 +460,10 @@ namespace nvhttp {
   /**
    * @brief Create launch session.
    *
-   * @param host_audio Host audio.
    * @param args Arguments forwarded to the callable or parser.
    * @return Constructed launch session object.
    */
-  std::shared_ptr<rtsp_stream::launch_session_t> make_launch_session(bool host_audio, const args_t &args) {
+  std::shared_ptr<rtsp_stream::launch_session_t> make_launch_session(const args_t &args) {
     auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
 
     launch_session->id = ++session_id_counter;
@@ -474,7 +471,6 @@ namespace nvhttp {
     auto rikey = util::from_hex_vec(get_arg(args, "rikey"), true);
     std::copy(rikey.cbegin(), rikey.cend(), std::back_inserter(launch_session->gcm_key));
 
-    launch_session->host_audio = host_audio;
     std::stringstream mode = std::stringstream(get_arg(args, "mode", "0x0x0"));
     // Split mode by the char "x", to populate width/height/fps
     int x = 0;
@@ -979,9 +975,6 @@ namespace nvhttp {
     }
 
     if (!pin_stdin) {
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
-      system_tray::update_tray_require_pin();
-#endif
       return true;
     }
 
@@ -1115,36 +1108,7 @@ namespace nvhttp {
    * @return Moonlight codec capability bitmask for the currently probed encoders.
    */
   uint32_t get_codec_mode_flags() {
-    uint32_t codec_mode_flags = SCM_H264;
-    if (video::last_encoder_probe_supported_yuv444_for_codec[0]) {
-      codec_mode_flags |= SCM_H264_HIGH8_444;
-    }
-    if (video::active_hevc_mode >= 2) {
-      codec_mode_flags |= SCM_HEVC;
-      if (video::last_encoder_probe_supported_yuv444_for_codec[1]) {
-        codec_mode_flags |= SCM_HEVC_REXT8_444;
-      }
-    }
-    if (video::active_hevc_mode == 3 || video::active_hevc_mode == 5) {
-      codec_mode_flags |= SCM_HEVC_MAIN10;
-    }
-    if ((video::active_hevc_mode == 4 || video::active_hevc_mode == 5) && video::last_encoder_probe_supported_yuv444_for_codec[1]) {
-      codec_mode_flags |= SCM_HEVC_REXT10_444;
-    }
-
-    if (video::active_av1_mode >= 2) {
-      codec_mode_flags |= SCM_AV1_MAIN8;
-      if (video::last_encoder_probe_supported_yuv444_for_codec[2]) {
-        codec_mode_flags |= SCM_AV1_HIGH8_444;
-      }
-    }
-    if (video::active_av1_mode == 3 || video::active_av1_mode == 5) {
-      codec_mode_flags |= SCM_AV1_MAIN10;
-    }
-    if ((video::active_av1_mode == 4 || video::active_av1_mode == 5) && video::last_encoder_probe_supported_yuv444_for_codec[2]) {
-      codec_mode_flags |= SCM_AV1_HIGH10_444;
-    }
-    return codec_mode_flags;
+    return video::codec_mode_flags;
   }
 
   /**
@@ -1179,7 +1143,7 @@ namespace nvhttp {
     tree.put("root.uniqueid", http::unique_id);
     tree.put("root.HttpsPort", net::map_port(PORT_HTTPS));
     tree.put("root.ExternalPort", net::map_port(PORT_HTTP));
-    tree.put("root.MaxLumaPixelsHEVC", video::active_hevc_mode > 1 ? "1869449984" : "0");
+    tree.put("root.MaxLumaPixelsHEVC", (video::codec_mode_flags & SCM_HEVC) ? "1869449984" : "0");
 
     // Only include the MAC address for requests sent from paired clients over HTTPS.
     // For HTTP requests, use a placeholder MAC address that Moonlight knows to ignore.
@@ -1263,7 +1227,7 @@ namespace nvhttp {
     for (auto &proc : proc::proc.get_apps()) {
       pt::ptree app;
 
-      app.put("IsHdrSupported"s, video::active_hevc_mode >= 3 ? 1 : 0);
+      app.put("IsHdrSupported"s, (video::codec_mode_flags & SCM_HEVC_MAIN10) ? 1 : 0);
       app.put("AppTitle"s, proc.name);
       app.put("ID", proc.id);
 
@@ -1274,15 +1238,13 @@ namespace nvhttp {
   /**
    * @brief Launch the requested application for a GameStream session.
    *
-   * @param host_audio Host audio.
    * @param response HTTP response object to populate.
    * @param request HTTP request data from the client.
    */
-  void launch(bool &host_audio, resp_https_t response, req_https_t request) {
+  void launch(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
     pt::ptree tree;
-    bool revert_display_configuration {false};
     auto g = util::fail_guard([&]() {
       std::ostringstream data;
 
@@ -1293,17 +1255,12 @@ namespace nvhttp {
       pt::write_xml(data, tree);
       response->write(data.str());
       response->close_connection_after_response = true;
-
-      if (revert_display_configuration) {
-        display_device::revert_configuration();
-      }
     });
 
     auto args = request->parse_query_string();
     if (
       args.find("rikey"s) == std::end(args) ||
       args.find("rikeyid"s) == std::end(args) ||
-      args.find("localAudioPlayMode"s) == std::end(args) ||
       args.find("appid"s) == std::end(args)
     ) {
       tree.put("root.resume", 0);
@@ -1324,29 +1281,13 @@ namespace nvhttp {
       return;
     }
 
-    host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
-    auto launch_session = make_launch_session(host_audio, args);
+    auto launch_session = make_launch_session(args);
 
-    if (rtsp_stream::session_count() == 0) {
-      // The display should be restored in case something fails as there are no other sessions.
-      revert_display_configuration = true;
-
-      // We want to prepare display only if there are no active sessions at
-      // the moment. This should be done before probing encoders as it could
-      // change the active displays.
-      display_device::configure_display(config::video, *launch_session);
-
-      // Probe encoders again before streaming to ensure our chosen
-      // encoder matches the active GPU (which could have changed
-      // due to hotplugging, driver crash, primary monitor change,
-      // or any number of other factors).
-      if (video::probe_encoders()) {
-        tree.put("root.<xmlattr>.status_code", 503);
-        tree.put("root.<xmlattr>.status_message", "Failed to initialize video capture/encoding. Is a display connected and turned on?");
-        tree.put("root.gamesession", 0);
-
-        return;
-      }
+    if (!video::codec_mode_flags) {
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "No media source is connected");
+      tree.put("root.gamesession", 0);
+      return;
     }
 
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
@@ -1361,10 +1302,10 @@ namespace nvhttp {
     }
 
     if (appid > 0) {
-      auto err = proc::proc.execute((int) appid, launch_session);
+      auto err = proc::proc.activate((int) appid);
       if (err) {
         tree.put("root.<xmlattr>.status_code", err);
-        tree.put("root.<xmlattr>.status_message", "Failed to start the specified application");
+        tree.put("root.<xmlattr>.status_message", "Failed to select the specified application");
         tree.put("root.gamesession", 0);
 
         return;
@@ -1386,17 +1327,15 @@ namespace nvhttp {
     rtsp_stream::launch_session_raise(launch_session);
 
     // Stream was started successfully, we will revert the config when the app or session terminates
-    revert_display_configuration = false;
   }
 
   /**
    * @brief Resume an existing GameStream session.
    *
-   * @param host_audio Host audio.
    * @param response HTTP response object to populate.
    * @param request HTTP request data from the client.
    */
-  void resume(bool &host_audio, resp_https_t response, req_https_t request) {
+  void resume(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
     pt::ptree tree;
@@ -1433,32 +1372,13 @@ namespace nvhttp {
       return;
     }
 
-    // Newer Moonlight clients send localAudioPlayMode on /resume too,
-    // so we should use it if it's present in the args and there are
-    // no active sessions we could be interfering with.
-    const bool no_active_sessions {rtsp_stream::session_count() == 0};
-    if (no_active_sessions && args.find("localAudioPlayMode"s) != std::end(args)) {
-      host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
-    }
-    const auto launch_session = make_launch_session(host_audio, args);
+    const auto launch_session = make_launch_session(args);
 
-    if (no_active_sessions) {
-      // We want to prepare display only if there are no active sessions at
-      // the moment. This should be done before probing encoders as it could
-      // change the active displays.
-      display_device::configure_display(config::video, *launch_session);
-
-      // Probe encoders again before streaming to ensure our chosen
-      // encoder matches the active GPU (which could have changed
-      // due to hotplugging, driver crash, primary monitor change,
-      // or any number of other factors).
-      if (video::probe_encoders()) {
-        tree.put("root.resume", 0);
-        tree.put("root.<xmlattr>.status_code", 503);
-        tree.put("root.<xmlattr>.status_message", "Failed to initialize video capture/encoding. Is a display connected and turned on?");
-
-        return;
-      }
+    if (!video::codec_mode_flags) {
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "No media source is connected");
+      tree.put("root.resume", 0);
+      return;
     }
 
     auto encryption_mode = net::encryption_mode_for_address(request->remote_endpoint().address());
@@ -1515,7 +1435,6 @@ namespace nvhttp {
     }
 
     // The config needs to be reverted regardless of whether "proc::proc.terminate()" was called or not.
-    display_device::revert_configuration();
   }
 
   /**
@@ -1568,10 +1487,6 @@ namespace nvhttp {
     auto pkey = file_handler::read_file(config::nvhttp.pkey.c_str());
     auto cert = file_handler::read_file(config::nvhttp.cert.c_str());
     setup(pkey, cert);
-
-    // resume doesn't always get the parameter "localAudioPlayMode"
-    // launch will store it in host_audio
-    bool host_audio {};
 
     https_server_t https_server {config::nvhttp.cert, config::nvhttp.pkey};
     http_server_t http_server;
@@ -1645,11 +1560,11 @@ namespace nvhttp {
     };
     https_server.resource["^/applist$"]["GET"] = applist;
     https_server.resource["^/appasset$"]["GET"] = appasset;
-    https_server.resource["^/launch$"]["GET"] = [&host_audio](auto resp, auto req) {
-      launch(host_audio, resp, req);
+    https_server.resource["^/launch$"]["GET"] = [](auto resp, auto req) {
+      launch(resp, req);
     };
-    https_server.resource["^/resume$"]["GET"] = [&host_audio](auto resp, auto req) {
-      resume(host_audio, resp, req);
+    https_server.resource["^/resume$"]["GET"] = [](auto resp, auto req) {
+      resume(resp, req);
     };
     https_server.resource["^/cancel$"]["GET"] = cancel;
 

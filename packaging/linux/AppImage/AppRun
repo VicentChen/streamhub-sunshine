@@ -28,10 +28,10 @@ echo "
  ------            # This message
 
          $ARGV0  --install, -i
-                   # Install or update input rules and sunshine.service files.
+                   # Install or update sunshine.service files.
 
          $ARGV0  --remove, -r
-                   # Remove input rules sunshine.service files.
+                   # Remove sunshine.service files.
 
          $ARGV0  --appimage-help
                    # Show available AppImage options
@@ -44,17 +44,6 @@ echo "
 }
 
 function install() {
-  # user input rules
-  # shellcheck disable=SC2002
-  cat "$SUNSHINE_SHARE_HERE/udev/rules.d/60-sunshine.rules" | sudo tee /etc/udev/rules.d/60-sunshine.rules
-  cat "$SUNSHINE_SHARE_HERE/modules-load.d/60-sunshine.conf" | sudo tee /etc/modules-load.d/60-sunshine.conf
-  sudo modprobe uhid
-  sudo udevadm control --reload-rules
-  sudo udevadm trigger --property-match=DEVNAME=/dev/uinput
-  sudo udevadm trigger --property-match=DEVNAME=/dev/uhid
-  sudo udevadm trigger --subsystem-match=hidraw
-  sudo udevadm trigger --subsystem-match=input
-
   # sunshine service
   mkdir -p ~/.config/systemd/user
   cp -r "$SUNSHINE_SHARE_HERE/systemd/user/" ~/.config/systemd/
@@ -62,17 +51,10 @@ function install() {
   sed -i -e "s#$SUNSHINE_PATH#$(readlink -f $ARGV0)#g" ~/.config/systemd/user/app-dev.lizardbyte.app.Sunshine.service
 
   # setcap
-  sudo setcap cap_sys_admin,cap_sys_nice+p "$(readlink -f "$SUNSHINE_BIN_HERE")"
+  sudo setcap cap_sys_nice+p "$(readlink -f "$SUNSHINE_BIN_HERE")"
 }
 
 function remove() {
-  # remove input rules
-  sudo rm -f /etc/udev/rules.d/60-sunshine.rules
-  sudo udevadm control --reload-rules
-
-  # remove uhid module loading config
-  sudo rm -f /etc/modules-load.d/60-sunshine.conf
-
   # remove service
   sudo rm -f ~/.config/systemd/user/app-dev.lizardbyte.app.Sunshine.service
 }

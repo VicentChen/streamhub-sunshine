@@ -252,20 +252,6 @@ wheels = [
 ]
 
 [[package]]
-name = "glad2"
-source = { directory = "third-party/glad" }
-dependencies = [
-    { name = "jinja2" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "glad2-fortran", marker = "extra == 'fortran'" },
-    { name = "jinja2", specifier = ">=2.7,<4.0" },
-]
-provides-extras = ["fortran"]
-
-[[package]]
 name = "idna"
 version = "3.19"
 source = { registry = "https://pypi.org/simple" }
@@ -615,9 +601,6 @@ flatpak = [
     { name = "flatpak-node-generator" },
     { name = "flatpak-pip-generator" },
 ]
-glad = [
-    { name = "glad2" },
-]
 
 [package.metadata]
 requires-dist = [{ name = "lizardbyte-common", extras = ["c"], directory = "third-party/lizardbyte-common" }]
@@ -627,7 +610,6 @@ flatpak = [
     { name = "flatpak-node-generator", directory = "packaging/linux/flatpak/deps/flatpak-builder-tools/node" },
     { name = "flatpak-pip-generator", directory = "packaging/linux/flatpak/deps/flatpak-builder-tools/pip" },
 ]
-glad = [{ name = "glad2", directory = "third-party/glad" }]
 
 [[package]]
 name = "yarl"

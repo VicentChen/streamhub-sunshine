@@ -1,4 +1,6 @@
 # App Examples
+
+> StreamHub fork 已移除本机应用执行、准备/撤销命令和命令环境变量；本页相关上游示例不再适用。当前行为见 [应用执行裁剪记录](streamhub/slimming-applications.md)。
 Since not all applications behave the same, we decided to create some examples to help you get started adding games
 and applications to Sunshine.
 

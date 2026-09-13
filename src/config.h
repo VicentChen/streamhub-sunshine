@@ -13,7 +13,7 @@
 #include <vector>
 
 // local includes
-#include "nvenc/nvenc_config.h"
+#include <array>
 
 namespace config {
   // Valid range for the packetsize limit
@@ -45,176 +45,12 @@ namespace config {
    * @brief Video encoder, capture, and color settings loaded from configuration.
    */
   struct video_t {
-    // ffmpeg params
-    /**
-     * @brief Quantization parameter used by encoders where higher values trade quality for compression.
-     */
-    int qp;  // higher == more compression and less quality
-
-    int hevc_mode;  ///< HEVC support mode advertised to clients.
-    int av1_mode;  ///< AV1 support mode advertised to clients.
-
-    int min_threads;  ///< Minimum number of threads or slices for CPU encoding.
-
-    struct {
-      std::string sw_preset;  ///< FFmpeg software-encoder preset.
-      std::string sw_tune;  ///< FFmpeg software-encoder tuning profile.
-      std::optional<int> svtav1_preset;  ///< SVT-AV1 preset; unset uses the encoder default.
-    } sw;  ///< Software encoder options.
-
-    nvenc::nvenc_config nv;  ///< NVIDIA NVENC encoder settings.
-    bool nv_realtime_hags;  ///< Enable the NVIDIA realtime HAGS workaround.
-    bool nv_opengl_vulkan_on_dxgi;  ///< Prefer NVIDIA OpenGL/Vulkan-on-DXGI interop.
-    bool nv_sunshine_high_power_mode;  ///< Request NVIDIA high-power mode for Sunshine.
-
-    struct {
-      int preset;  ///< Legacy NVENC preset selection.
-      int multipass;  ///< Legacy NVENC multipass mode.
-      int h264_coder;  ///< Legacy NVENC H.264 entropy-coding mode.
-      int aq;  ///< Legacy NVENC adaptive-quantization mode.
-      int vbv_percentage_increase;  ///< Legacy NVENC VBV buffer-size percentage increase.
-    } nv_legacy;  ///< Legacy NVIDIA encoder options kept for config compatibility.
-
-    struct {
-      std::optional<int> qsv_preset;  ///< Intel Quick Sync preset; unset uses the encoder default.
-      std::optional<int> qsv_cavlc;  ///< Intel Quick Sync CAVLC selection; unset uses the encoder default.
-      bool qsv_slow_hevc;  ///< Whether to enable the slower Intel Quick Sync HEVC path.
-    } qsv;  ///< Intel Quick Sync encoder options.
-
-    struct {
-      std::optional<int> amd_usage_h264;  ///< AMF H.264 usage profile; unset uses the encoder default.
-      std::optional<int> amd_usage_hevc;  ///< AMF HEVC usage profile; unset uses the encoder default.
-      std::optional<int> amd_usage_av1;  ///< AMF AV1 usage profile; unset uses the encoder default.
-      std::optional<int> amd_rc_h264;  ///< AMF H.264 rate-control mode; unset uses the encoder default.
-      std::optional<int> amd_rc_hevc;  ///< AMF HEVC rate-control mode; unset uses the encoder default.
-      std::optional<int> amd_rc_av1;  ///< AMF AV1 rate-control mode; unset uses the encoder default.
-      std::optional<int> amd_enforce_hrd;  ///< AMF HRD enforcement setting; unset uses the encoder default.
-      std::optional<int> amd_quality_h264;  ///< AMF H.264 quality preset; unset uses the encoder default.
-      std::optional<int> amd_quality_hevc;  ///< AMF HEVC quality preset; unset uses the encoder default.
-      std::optional<int> amd_quality_av1;  ///< AMF AV1 quality preset; unset uses the encoder default.
-      std::optional<int> amd_preanalysis;  ///< AMF pre-analysis setting; unset uses the encoder default.
-      std::optional<int> amd_vbaq;  ///< AMF variance-based adaptive-quantization setting; unset uses the encoder default.
-      std::optional<int> amd_max_au_size;  ///< Maximum AMF H.264/HEVC access unit size in bits; unset uses the encoder default.
-      int amd_coder;  ///< AMF entropy-coding mode.
-    } amd;  ///< AMD AMF encoder options.
-
-    struct {
-      int vt_allow_sw;  ///< Whether VideoToolbox may use software encoding.
-      int vt_require_sw;  ///< Whether VideoToolbox must use software encoding.
-      int vt_realtime;  ///< Whether VideoToolbox uses realtime encoding mode.
-      int vt_coder;  ///< VideoToolbox entropy-coding mode.
-    } vt;  ///< VideoToolbox encoder options.
-
-    struct {
-      std::optional<int> blbrc;  ///< VA-API block-level bitrate-control setting; unset uses the encoder default.
-      std::optional<int> vaapi_quality;  ///< VA-API quality setting; unset uses the encoder default.
-      std::optional<int> vaapi_rc;  ///< VA-API rate-control mode; unset uses the encoder default.
-      std::string vaapi_rc_str;  ///< Text representation of the selected VA-API rate-control mode.
-      bool strict_rc_buffer;  ///< Whether VA-API must strictly enforce the rate-control buffer.
-    } vaapi;  ///< VA-API encoder options.
-
-    struct {
-      int tune;  ///< Vulkan encoder tuning mode: default, HQ, LL, ULL, or lossless.
-      int rc_mode;  ///< Vulkan encoder rate-control mode: driver, CQP, CBR, or VBR.
-    } vk;  ///< Vulkan encoder options.
-
-    std::string capture;  ///< Capture backend name selected by configuration.
-    std::string encoder;  ///< Encoder backend name selected by configuration.
-    std::string adapter_name;  ///< Display adapter name selected in configuration.
-    std::string output_name;  ///< Display output name selected in configuration.
-
-    /**
-     * @brief Display-device integration settings.
-     */
-    struct dd_t {
-      /**
-       * @brief Compatibility workarounds for display-device control.
-       */
-      struct workarounds_t {
-        std::chrono::milliseconds hdr_toggle_delay;  ///< Specify whether to apply HDR high-contrast color workaround and what delay to use.
-      };
-
-      /**
-       * @brief Selects how Sunshine prepares the active display before streaming.
-       */
-      enum class config_option_e {
-        disabled,  ///< Disable the configuration for the device.
-        verify_only,  ///< @seealso{display_device::SingleDisplayConfiguration::DevicePreparation}
-        ensure_active,  ///< @seealso{display_device::SingleDisplayConfiguration::DevicePreparation}
-        ensure_primary,  ///< @seealso{display_device::SingleDisplayConfiguration::DevicePreparation}
-        ensure_only_display  ///< @seealso{display_device::SingleDisplayConfiguration::DevicePreparation}
-      };
-
-      /**
-       * @brief Selects how Sunshine chooses the stream display resolution.
-       */
-      enum class resolution_option_e {
-        disabled,  ///< Do not change resolution.
-        automatic,  ///< Change resolution and use the one received from Moonlight.
-        manual  ///< Change resolution and use the manually provided one.
-      };
-
-      /**
-       * @brief Selects how Sunshine chooses the stream display refresh rate.
-       */
-      enum class refresh_rate_option_e {
-        disabled,  ///< Do not change refresh rate.
-        automatic,  ///< Change refresh rate and use the one received from Moonlight.
-        manual  ///< Change refresh rate and use the manually provided one.
-      };
-
-      /**
-       * @brief Selects how Sunshine handles HDR state for the stream display.
-       */
-      enum class hdr_option_e {
-        disabled,  ///< Do not change HDR settings.
-        automatic  ///< Change HDR settings and use the state requested by Moonlight.
-      };
-
-      /**
-       * @brief Single display mode remapping rule from configuration.
-       */
-      struct mode_remapping_entry_t {
-        std::string requested_resolution;  ///< Resolution string requested by the client.
-        std::string requested_fps;  ///< Refresh-rate string requested by the client.
-        std::string final_resolution;  ///< Resolution string to apply after remapping.
-        std::string final_refresh_rate;  ///< Refresh-rate string to apply after remapping.
-      };
-
-      /**
-       * @brief Collection of display mode remapping rules.
-       */
-      struct mode_remapping_t {
-        std::vector<mode_remapping_entry_t> mixed;  ///< To be used when `resolution_option` and `refresh_rate_option` is set to `automatic`.
-        std::vector<mode_remapping_entry_t> resolution_only;  ///< To be use when only `resolution_option` is set to `automatic`.
-        std::vector<mode_remapping_entry_t> refresh_rate_only;  ///< To be use when only `refresh_rate_option` is set to `automatic`.
-      };
-
-      config_option_e configuration_option;  ///< Display-preparation mode selected by configuration.
-      resolution_option_e resolution_option;  ///< Resolution-selection mode selected by configuration.
-      std::string manual_resolution;  ///< Manual resolution in case `resolution_option == resolution_option_e::manual`.
-      refresh_rate_option_e refresh_rate_option;  ///< Refresh-rate selection mode selected by configuration.
-      std::string manual_refresh_rate;  ///< Manual refresh rate in case `refresh_rate_option == refresh_rate_option_e::manual`.
-      hdr_option_e hdr_option;  ///< HDR-selection mode selected by configuration.
-      std::chrono::milliseconds config_revert_delay;  ///< Time to wait until settings are reverted (after stream ends/app exists).
-      bool config_revert_on_disconnect;  ///< Specify whether to revert display configuration on client disconnect.
-      mode_remapping_t mode_remapping;  ///< Display mode remapping rules grouped by automatic selection mode.
-      workarounds_t wa;  ///< Display-device compatibility workarounds.
-    } dd;  ///< Display-device integration settings.
-
-    int max_bitrate;  ///< Maximum bitrate ceiling in kbps for bitrate requested from the client.
-    double minimum_fps_target;  ///< Lowest framerate that will be used when streaming. Range 0-1000, 0 = half of client's requested framerate.
+    int max_bitrate;
   };
 
   /**
    * @brief Audio capture and encoder settings loaded from configuration.
    */
-  struct audio_t {
-    std::string sink;  ///< Audio output device/sink to use for audio capture
-    std::string virtual_sink;  ///< Virtual audio sink for audio routing
-    bool stream;  ///< Enable audio streaming to clients
-    bool install_steam_drivers;  ///< Install Steam audio drivers for enhanced compatibility
-  };
 
   /**
    * @brief Encryption policy that always sends unencrypted video.
@@ -268,29 +104,6 @@ namespace config {
   /**
    * @brief Input emulation settings loaded from configuration.
    */
-  struct input_t {
-    std::unordered_map<int, int> keybindings;  ///< Client keycode to platform keycode bindings.
-
-    std::chrono::milliseconds back_button_timeout;  ///< Hold duration that turns a controller Back button into a special action.
-    std::chrono::milliseconds key_repeat_delay;  ///< Delay before repeating a held keyboard key.
-    std::chrono::duration<double> key_repeat_period;  ///< Interval between repeated keyboard key events.
-
-    std::string gamepad;  ///< Virtual controller backend selected by configuration.
-    bool ds4_back_as_touchpad_click;  ///< Map Back/Select to touchpad click for PlayStation-style gamepads.
-    bool motion_as_ds4;  ///< Prefer PlayStation-style emulation for client gamepads with motion controls.
-    bool touchpad_as_ds4;  ///< Prefer PlayStation-style emulation for client gamepads with touchpad input.
-    bool virtualhid_randomize_mac;  ///< Randomize the libvirtualhid virtual controller MAC address.
-
-    bool keyboard;  ///< Enable keyboard input from clients.
-    bool key_rightalt_to_key_win;  ///< Map the client Right Alt key to the Windows key.
-    bool mouse;  ///< Enable mouse input from clients.
-    bool controller;  ///< Enable controller input from clients.
-
-    bool always_send_scancodes;  ///< Always send keyboard scancodes when available.
-
-    bool high_resolution_scrolling;  ///< Enable high-resolution mouse-wheel events.
-    bool native_pen_touch;  ///< Enable native pen and touch injection.
-  };
 
   namespace flag {
     /**
@@ -299,45 +112,11 @@ namespace config {
     enum flag_e : std::size_t {
       PIN_STDIN = 0,  ///< Read PIN from stdin instead of http
       FRESH_STATE,  ///< Do not load or save state
-      FORCE_VIDEO_HEADER_REPLACE,  ///< force replacing headers inside video data
       UPNP,  ///< Try Universal Plug 'n Play
       CONST_PIN,  ///< Use "universal" pin
       FLAG_SIZE  ///< Number of flags
     };
   }  // namespace flag
-
-  /**
-   * @brief External preparation command plus its privilege requirement.
-   */
-  struct prep_cmd_t {
-    /**
-     * @brief Build a preparation command entry from parsed configuration data.
-     *
-     * @param do_cmd Command to run before the application starts.
-     * @param undo_cmd Command to run after the application exits.
-     * @param elevated Whether the command should run with elevated privileges.
-     */
-    prep_cmd_t(std::string &&do_cmd, std::string &&undo_cmd, bool &&elevated):
-        do_cmd(std::move(do_cmd)),
-        undo_cmd(std::move(undo_cmd)),
-        elevated(std::move(elevated)) {
-    }
-
-    /**
-     * @brief Build a preparation command entry from parsed configuration data.
-     *
-     * @param do_cmd Command to run before the application starts.
-     * @param elevated Whether the command should run with elevated privileges.
-     */
-    explicit prep_cmd_t(std::string &&do_cmd, bool &&elevated):
-        do_cmd(std::move(do_cmd)),
-        elevated(std::move(elevated)) {
-    }
-
-    std::string do_cmd;  ///< Command to run before the application starts.
-    std::string undo_cmd;  ///< Command to run after the application exits.
-    bool elevated;  ///< Whether the process should be launched elevated.
-  };
 
   /**
    * @brief Top-level Sunshine configuration and credential state.
@@ -369,8 +148,6 @@ namespace config {
 
     std::string log_file;  ///< Path to the configured log file.
     bool notify_pre_releases;  ///< Notify users about pre-release updates.
-    bool system_tray;  ///< Enable the system tray integration.
-    std::vector<prep_cmd_t> prep_cmds;  ///< Preparation commands executed around application launch.
 
     // List of allowed origins for CSRF protection (e.g., "https://example.com,https://app.example.com")
     // Comma-separated list of additional origins. Default includes localhost variants and web UI port.
@@ -378,10 +155,8 @@ namespace config {
   };
 
   extern video_t video;
-  extern audio_t audio;
   extern stream_t stream;
   extern nvhttp_t nvhttp;
-  extern input_t input;
   extern sunshine_t sunshine;
 
 #ifdef SUNSHINE_TESTS

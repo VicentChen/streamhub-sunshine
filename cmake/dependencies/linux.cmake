@@ -1,3 +1,1 @@
-# linux specific dependencies
-
-include("${CMAKE_MODULE_PATH}/dependencies/glad.cmake")
+# Linux networking and scheduling dependencies are resolved in compile_definitions/linux.cmake.

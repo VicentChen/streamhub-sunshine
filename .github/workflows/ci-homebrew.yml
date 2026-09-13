@@ -167,18 +167,6 @@ jobs:
           # testing
           cat ./homebrew/sunshine.rb
 
-      - name: Setup Xvfb
-        if: matrix.release != true && runner.os == 'Linux'
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y \
-            xvfb
-
-          export DISPLAY=:1
-          Xvfb ${DISPLAY} -screen 0 1024x768x24 &
-
-          echo "DISPLAY=${DISPLAY}" >> "${GITHUB_ENV}"
-
       - run: echo "::add-matcher::.github/matchers/gcc-strip3.json"
       - name: Validate Homebrew Formula
         id: test

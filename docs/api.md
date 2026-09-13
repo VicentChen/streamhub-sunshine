@@ -88,14 +88,8 @@ curl -u user:pass -H "X-CSRF-Token: your_token_here" \
 ## POST /api/pin
 @copydoc confighttp::savePin()
 
-## POST /api/reset-display-device-persistence
-@copydoc confighttp::resetDisplayDevicePersistence()
-
 ## POST /api/restart
 @copydoc confighttp::restart()
-
-## GET /api/virtual-input/status
-@copydoc confighttp::getVirtualInputStatus()
 
 <div class="section_buttons">
 

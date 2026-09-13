@@ -59,32 +59,7 @@ jobs:
           sudo add-apt-repository universe
 
           sudo apt-get install -y \
-            libdrm-dev \
-            libfuse2 \
-            libgl-dev \
-            libwayland-dev \
-            libx11-xcb-dev \
-            libxcb-dri3-dev \
-            libxfixes-dev \
-            libxtst-dev
-
-      - name: Build latest libva
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        timeout-minutes: 5
-        run: |
-          gh release download --archive=tar.gz --repo=intel/libva
-          tar xzf libva-*.tar.gz && rm libva-*.tar.gz
-          cd libva-*
-          ./autogen.sh --prefix=/usr --libdir="/usr/lib/${M_ARCH}-linux-gnu" \
-            --enable-drm \
-            --enable-x11 \
-            --enable-glx \
-            --enable-wayland \
-            --without-legacy
-          make -j "$(nproc)"
-          sudo make install
-          cd .. && rm -rf libva-*
+            libfuse2
 
       - name: Build Linux
         env:
@@ -109,11 +84,6 @@ jobs:
         run: |
           # install sunshine to the DESTDIR
           DESTDIR=AppDir ninja install
-          test -f AppDir/usr/share/sunshine/udev/rules.d/60-sunshine.rules
-          grep -Fq 'IMPORT{parent}="HID_*"' \
-            AppDir/usr/share/sunshine/udev/rules.d/60-sunshine.rules
-          grep -Fq 'ENV{HID_PHYS}=="libvirtualhid/uhid/*"' \
-            AppDir/usr/share/sunshine/udev/rules.d/60-sunshine.rules
 
           # custom AppRun file
           cp -f ../packaging/linux/AppImage/AppRun ./AppDir/
@@ -130,17 +100,9 @@ jobs:
           wget --max-redirect=1 -q "$url"  # NOSONAR(githubactions:S6506): GitHub release needs one redirect.
           chmod +x "linuxdeploy-${M_ARCH}.AppImage"
 
-          # https://github.com/linuxdeploy/linuxdeploy-plugin-qt
-          url="${LINUXDEPLOY_GH}-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-${M_ARCH}.AppImage"
-          wget --max-redirect=1 -q "$url"  # NOSONAR(githubactions:S6506): GitHub release needs one redirect.
-          chmod +x "linuxdeploy-plugin-qt-${M_ARCH}.AppImage"
-          export QMAKE=/usr/lib/qt6/bin/qmake
-          export EXTRA_QT_MODULES="svg;"
-          "$QMAKE" -query QT_INSTALL_PLUGINS
 
           "./linuxdeploy-${M_ARCH}.AppImage" \
             --appdir ./AppDir \
-            --plugin qt \
             --executable ./sunshine \
             --icon-file "../$ICON_FILE" \
             --desktop-file "./$DESKTOP_FILE" \
@@ -154,11 +116,6 @@ jobs:
 
           # permissions
           chmod +x "../artifacts/Sunshine_${VERSION}_${M_ARCH}.AppImage"
-
-      - name: Delete CUDA
-        # free up space on the runner
-        run: |
-          rm -rf ./build/cuda
 
       - name: Setup python
         id: python
@@ -178,15 +135,6 @@ jobs:
           appimagelint --help
 
           appimagelint "./artifacts/Sunshine_${VERSION}_${M_ARCH}.AppImage"
-
-      - name: Install screenshot dependency
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y imagemagick
-
-          # clean apt cache
-          sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/*
 
       - name: Setup virtual desktop
         uses: LizardByte/actions/actions/virtual_desktop@188c8ccad593e0f68bcf6aacb6bf84f10359d26f  # v2026.905.43751
@@ -211,16 +159,6 @@ jobs:
         id: test
         working-directory: build/tests
         run: ./test_sunshine --gtest_color=yes --gtest_output=xml:test_results.xml
-
-      - name: Upload system tray screenshots
-        if: >-
-          always() &&
-          (steps.test.outcome == 'success' || steps.test.outcome == 'failure')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: sunshine-screenshots-${{ matrix.name }}
-          path: build/tests/screenshots
-          if-no-files-found: error
 
       - name: Generate gcov report
         id: test_report

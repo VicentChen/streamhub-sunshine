@@ -24,16 +24,15 @@ extern "C" {
 
 // local includes
 #include "config.h"
-#include "display_device.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
 #include "network.h"
 #include "platform/common.h"
 #include "process.h"
+#include "rtsp.h"
 #include "stream.h"
 #include "sync.h"
-#include "system_tray.h"
 #include "thread_safe.h"
 #include "utility.h"
 
@@ -491,7 +490,7 @@ namespace stream {
 
     safe::mail_t mail;  ///< Mailbox used to distribute packets and lifecycle events.
 
-    std::shared_ptr<input::input_t> input;  ///< Platform input device state for this stream.
+    std::shared_ptr<input::input_t> input;  ///< Controller protocol state for this stream.
 
     std::jthread audioThread;  ///< Audio thread.
     std::jthread videoThread;  ///< Video thread.
@@ -552,7 +551,6 @@ namespace stream {
 
     std::uint32_t launch_session_id;  ///< RTSP launch-session ID associated with this stream.
     std::string client_cert;  ///< PEM certificate for the paired client owning the stream.
-    std::string input_session_id;  ///< Stable client identity used to retain input devices across resume.
 
     safe::mail_raw_t::event_t<bool> shutdown_event;  ///< Event raised when the stream should shut down.
     safe::signal_t controlEnd;  ///< Signal raised when the control channel exits.
@@ -976,22 +974,6 @@ namespace stream {
    * @param _new Replacement byte sequence inserted into encoded packets.
    * @return Copy of the original buffer with each matching byte sequence replaced.
    */
-  std::vector<uint8_t> replace(const std::string_view &original, const std::string_view &old, const std::string_view &_new) {
-    std::vector<uint8_t> replaced;
-    replaced.reserve(original.size() + _new.size() - old.size());
-
-    auto begin = std::begin(original);
-    auto end = std::end(original);
-    auto next = std::search(begin, end, std::begin(old), std::end(old));
-
-    std::copy(begin, next, std::back_inserter(replaced));
-    if (next != end) {
-      std::copy(std::begin(_new), std::end(_new), std::back_inserter(replaced));
-      std::copy(next + old.size(), end, std::back_inserter(replaced));
-    }
-
-    return replaced;
-  }
 
   /**
    * @brief Pass gamepad feedback data back to the client.
@@ -1556,22 +1538,6 @@ namespace stream {
       auto lowseq = session->video.lowseq;
 
       std::string_view payload {(char *) packet->data(), packet->data_size()};
-      std::vector<uint8_t> payload_with_replacements;
-
-      // Apply replacements on the packet payload before performing any other operations.
-      // We need to know the final frame size to calculate the last packet size, and we
-      // must avoid matching replacements against the frame header or any other non-video
-      // part of the payload.
-      if (packet->is_idr() && packet->replacements) {
-        for (auto &replacement : *packet->replacements) {
-          auto frame_old = replacement.old;
-          auto frame_new = replacement._new;
-
-          payload_with_replacements = replace(payload, frame_old, frame_new);
-          payload = {(char *) payload_with_replacements.data(), payload_with_replacements.size()};
-        }
-      }
-
       video_short_frame_header_t frame_header = {};
       frame_header.headerType = 0x01;  // Short header type
       frame_header.frameType = packet->is_idr()                     ? 2 :
@@ -2124,7 +2090,7 @@ namespace stream {
   }
 
   /**
-   * @brief Run the session video capture and encode thread.
+   * @brief Receive the video peer handshake and hold its socket QoS lifetime.
    *
    * @param session Active streaming or pairing session for the request.
    */
@@ -2146,12 +2112,12 @@ namespace stream {
     auto address = session->video.peer.address();
     session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0);
 
-    BOOST_LOG(debug) << "Start capturing Video"sv;
-    video::capture(session->mail, session->config.monitor, session);
+    BOOST_LOG(debug) << "Video transport ready"sv;
+    session->shutdown_event->view();
   }
 
   /**
-   * @brief Run the session audio capture and encode thread.
+   * @brief Receive the audio peer handshake and hold its socket QoS lifetime.
    *
    * @param session Active streaming or pairing session for the request.
    */
@@ -2173,8 +2139,8 @@ namespace stream {
     auto address = session->audio.peer.address();
     session->audio.qos = platf::enable_socket_qos(ref->audio_sock.native_handle(), address, session->audio.peer.port(), platf::qos_data_type_e::audio, session->config.audioQosType != 0);
 
-    BOOST_LOG(debug) << "Start capturing Audio"sv;
-    audio::capture(session->mail, session->config.audio, session);
+    BOOST_LOG(debug) << "Audio transport ready"sv;
+    session->shutdown_event->view();
   }
 
   namespace session {
@@ -2212,9 +2178,7 @@ namespace stream {
      * @brief Wait for worker threads owned by the session to exit.
      */
     void join(session_t &session) {
-      // Current Nvidia drivers have a bug where NVENC can deadlock the encoder thread with hardware-accelerated
-      // GPU scheduling enabled. If this happens, we will terminate ourselves and the service can restart.
-      // The alternative is that Sunshine can never start another session until it's manually restarted.
+      // Bound shutdown when a transport worker fails to exit.
       auto task = []() {
         BOOST_LOG(fatal) << "Hang detected! Session failed to terminate in 10 seconds."sv;
         logging::log_flush();
@@ -2237,24 +2201,7 @@ namespace stream {
       input::reset(session.input);
 
       // If this is the last session, invoke the platform callbacks
-      if (--running_sessions == 0) {
-        bool revert_display_config {config::video.dd.config_revert_on_disconnect};
-        if (proc::proc.running()) {
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
-          system_tray::update_tray_pausing(proc::proc.get_last_run_app_name());
-#endif
-        } else {
-          // We have no app running and also no clients anymore.
-          revert_display_config = true;
-          input::terminate_gamepads();
-        }
-
-        if (revert_display_config) {
-          display_device::revert_configuration();
-        }
-
-        platf::streaming_will_stop();
-      }
+      --running_sessions;
 
       BOOST_LOG(debug) << "Session ended"sv;
     }
@@ -2263,7 +2210,7 @@ namespace stream {
      * @brief Start the audio, video, and control workers for a streaming session.
      */
     int start(session_t &session, const std::string &addr_string) {
-      session.input = input::alloc(session.mail, session.input_session_id);
+      session.input = input::alloc(session.mail);
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
@@ -2294,12 +2241,7 @@ namespace stream {
       session.state.store(state_e::RUNNING, std::memory_order_relaxed);
 
       // If this is the first session, invoke the platform callbacks
-      if (++running_sessions == 1) {
-        platf::streaming_will_start();
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
-        system_tray::update_tray_playing(proc::proc.get_last_run_app_name());
-#endif
-      }
+      ++running_sessions;
 
       return 0;
     }
@@ -2315,7 +2257,6 @@ namespace stream {
       session->shutdown_event = mail->event<bool>(mail::shutdown);
       session->launch_session_id = launch_session.id;
       session->client_cert = launch_session.client_cert;
-      session->input_session_id = launch_session.client_cert.empty() ? launch_session.unique_id : launch_session.client_cert;
 
       session->config = config;
 

@@ -609,7 +609,7 @@ if ($Action -eq "install") {
         -Color "Yellow"
     Write-Information ""
 
-    $totalSteps = 4
+    $totalSteps = 3
     $currentStep = 0
 
     # 1. Delete firewall rules
@@ -638,19 +638,7 @@ if ($Action -eq "install") {
         -Emoji "⚡"
     Write-Information ""
 
-    # 3. Restore NVIDIA preferences
-    $currentStep++
-    Write-Progress `
-        -Activity "Uninstalling Sunshine" `
-        -Status "Restoring NVIDIA settings" `
-        -PercentComplete (($currentStep / $totalSteps) * 100)
-    Invoke-SunshineIfExist `
-        -Arguments "--restore-nvprefs-undo" `
-        -Description "Restoring NVIDIA preferences" `
-        -Emoji "🎮"
-    Write-Information ""
-
-    # 4. Update PATH (remove)
+    # 3. Update PATH (remove)
     $currentStep++
     Write-Progress `
         -Activity "Uninstalling Sunshine" `

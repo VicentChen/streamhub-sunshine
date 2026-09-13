@@ -26,7 +26,6 @@ namespace rtsp_stream {
     std::string av_ping_payload;  ///< AV ping payload.
     uint32_t control_connect_data;  ///< Client-provided token used when connecting the control channel.
 
-    bool host_audio;  ///< Whether host audio should be played locally.
     std::string unique_id;  ///< Moonlight client unique identifier for this launch request.
     int width;  ///< Frame or display width in pixels.
     int height;  ///< Frame or display height in pixels.

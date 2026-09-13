@@ -4,7 +4,6 @@
  */
 // standard includes
 #include <csignal>
-#include <format>
 #include <iostream>
 #include <thread>
 
@@ -25,14 +24,6 @@ extern "C" {
 }
 
 using namespace std::literals;
-
-void launch_ui(const std::optional<std::string> &path) {
-  std::string url = std::format("https://localhost:{}", static_cast<int>(net::map_port(confighttp::PORT_HTTPS)));
-  if (path) {
-    url += *path;
-  }
-  platf::open_url(url);
-}
 
 namespace args {
   int creds(const char *name, int argc, char *argv[]) {
@@ -56,13 +47,7 @@ namespace args {
   }
 
 #ifdef _WIN32
-  int restore_nvprefs_undo() {
-    if (nvprefs_instance.load()) {
-      nvprefs_instance.restore_from_and_delete_undo_file_if_exists();
-      nvprefs_instance.unload();
-    }
-    return 0;
-  }
+
 #endif
 }  // namespace args
 

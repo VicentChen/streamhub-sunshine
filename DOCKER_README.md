@@ -1,3 +1,5 @@
+> 本文保留上游容器使用背景。本 fork 已删除本机采集、视频编码和设备注入，相关硬件配置不再适用；当前范围与验证见 [裁剪记录](docs/streamhub/slimming-core.md)。
+
 # Docker
 
 ## Important note

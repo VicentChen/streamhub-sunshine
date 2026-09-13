@@ -18,7 +18,6 @@
 
 // local includes
 #include "confighttp.h"
-#include "display_device.h"
 #include "entry_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
@@ -26,7 +25,7 @@
 #include "main.h"
 #include "nvhttp.h"
 #include "process.h"
-#include "system_tray.h"
+#include "rtsp.h"
 #include "upnp.h"
 #include "video.h"
 
@@ -69,11 +68,6 @@ std::map<std::string_view, std::function<int(const char *name, int argc, char **
   {"version"sv, [](const char *name, int argc, char **argv) {
      return args::version();
    }},
-#ifdef _WIN32
-  {"restore-nvprefs-undo"sv, [](const char *name, int argc, char **argv) {
-     return args::restore_nvprefs_undo();
-   }},
-#endif
 };
 
 #ifdef _WIN32
@@ -120,40 +114,6 @@ WINAPI BOOL ConsoleCtrlHandler(DWORD type) {
   return FALSE;
 }
 #endif
-
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
-constexpr bool tray_is_enabled = true;  ///< Compile-time flag indicating tray support is enabled.
-#else
-constexpr bool tray_is_enabled = false;
-#endif
-
-/**
- * @brief Run the main event loop until Sunshine is asked to exit.
- *
- * @param shutdown_event Shutdown event.
- */
-void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) {
-  bool run_loop = false;
-
-  // Conditions that would require the main thread event loop
-#ifndef _WIN32
-  run_loop = tray_is_enabled && config::sunshine.system_tray;  // On Windows, tray runs in separate thread, so no main loop needed for tray
-#endif
-
-  if (!run_loop) {
-    BOOST_LOG(info) << "No main thread features enabled, skipping event loop"sv;
-    // Wait for shutdown
-    shutdown_event->view();
-    return;
-  }
-
-  // Main thread event loop
-  BOOST_LOG(info) << "Starting main loop"sv;
-#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
-  while (system_tray::process_tray_events() == 0);
-#endif
-  BOOST_LOG(info) << "Main loop has exited"sv;
-}
 
 /**
  * @brief Run the main application or worker loop.
@@ -240,26 +200,7 @@ int main(int argc, char *argv[]) {
     return fn->second(argv[0], config::sunshine.cmd.argc, config::sunshine.cmd.argv);
   }
 
-  // Adding guard here first as it also performs recovery after crash,
-  // otherwise people could theoretically end up without display output.
-  // It also should be destroyed before forced shutdown to expedite the cleanup.
-  auto display_device_deinit_guard = display_device::init(platf::appdata() / "display_device.state", config::video);
-  if (!display_device_deinit_guard) {
-    BOOST_LOG(error) << "Display device session failed to initialize"sv;
-  }
-
 #ifdef _WIN32
-  // Modify relevant NVIDIA control panel settings if the system has corresponding gpu
-  if (nvprefs_instance.load()) {
-    // Restore global settings to the undo file left by improper termination of sunshine.exe
-    nvprefs_instance.restore_from_and_delete_undo_file_if_exists();
-    // Modify application settings for sunshine.exe
-    nvprefs_instance.modify_application_profile();
-    // Modify global settings, undo file is produced in the process to restore after improper termination
-    nvprefs_instance.modify_global_profile();
-    // Unload dynamic library to survive driver re-installation
-    nvprefs_instance.unload();
-  }
 
   // Wait as long as possible to terminate Sunshine.exe during logoff/shutdown
   SetProcessShutdownParameters(0x100, SHUTDOWN_NORETRY);
@@ -340,7 +281,7 @@ int main(int argc, char *argv[]) {
 
   // Create signal handler after logging has been initialized
   auto shutdown_event = mail::man->event<bool>(mail::shutdown);
-  on_signal(SIGINT, [&force_shutdown, &display_device_deinit_guard, shutdown_event]() {
+  on_signal(SIGINT, [&force_shutdown, shutdown_event]() {
     BOOST_LOG(info) << "Interrupt handler called"sv;
 
     auto task = []() {
@@ -352,15 +293,9 @@ int main(int argc, char *argv[]) {
 
     // Break out of the main loop
     shutdown_event->raise(true);
-
-    if (tray_is_enabled && config::sunshine.system_tray) {
-      system_tray::end_tray();
-    }
-
-    display_device_deinit_guard = nullptr;
   });
 
-  on_signal(SIGTERM, [&force_shutdown, &display_device_deinit_guard, shutdown_event]() {
+  on_signal(SIGTERM, [&force_shutdown, shutdown_event]() {
     BOOST_LOG(info) << "Terminate handler called"sv;
 
     auto task = []() {
@@ -372,12 +307,6 @@ int main(int argc, char *argv[]) {
 
     // Break out of the main loop
     shutdown_event->raise(true);
-
-    if (tray_is_enabled && config::sunshine.system_tray) {
-      system_tray::end_tray();
-    }
-
-    display_device_deinit_guard = nullptr;
   });
 
 #ifdef _WIN32
@@ -401,16 +330,6 @@ int main(int argc, char *argv[]) {
   }
 
   reed_solomon_init();
-  auto input_deinit_guard = input::init();
-
-  if (input::probe_gamepads()) {
-    BOOST_LOG(warning) << "No gamepad input is available"sv;
-  }
-
-  if (video::probe_encoders()) {
-    BOOST_LOG(error) << "Video failed to find working encoder"sv;
-  }
-
   if (http::init()) {
     BOOST_LOG(fatal) << "HTTP interface failed to initialize"sv;
 
@@ -449,23 +368,7 @@ int main(int argc, char *argv[]) {
   }
 #endif
 
-  if (tray_is_enabled && config::sunshine.system_tray) {
-    BOOST_LOG(info) << "Starting system tray"sv;
-#ifdef _WIN32
-    system_tray::prepare_tray_virtualhid_license();
-    system_tray::prepare_tray_virtualhid_driver();
-    // TODO: Windows has a weird bug where when running as a service and on the first Windows boot,
-    // the tray icon would not appear even though Sunshine is running correctly otherwise.
-    // Restarting the service would allow the icon to appear normally.
-    // For now we will keep the Windows tray icon on a separate thread.
-    // Ideally, we would run the system tray on the main thread for all platforms.
-    system_tray::init_tray_threaded();
-#else
-    system_tray::init_tray();
-#endif
-  }
-
-  mainThreadLoop(shutdown_event);
+  shutdown_event->view();
 
   httpThread.join();
   configThread.join();
@@ -473,14 +376,6 @@ int main(int argc, char *argv[]) {
 
   task_pool.stop();
   task_pool.join();
-
-#ifdef _WIN32
-  // Restore global NVIDIA control panel settings
-  if (nvprefs_instance.owning_undo_file() && nvprefs_instance.load()) {
-    nvprefs_instance.restore_global_profile();
-    nvprefs_instance.unload();
-  }
-#endif
 
   return lifetime::desired_exit_code;
 }

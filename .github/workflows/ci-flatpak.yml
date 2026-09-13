@@ -133,29 +133,6 @@ jobs:
       - name: Debug generated-sources.json
         run: cat generated-sources.json
 
-      - name: flatpak pip generator
-        # generates glad-dependencies.json for PyPI build-time dependencies (e.g. jinja2 for glad)
-        run: |
-          uv export \
-            --quiet \
-            --locked \
-            --only-group glad \
-            --no-emit-project \
-            --no-emit-local \
-            --no-header \
-            --output-file glad-requirements.txt
-
-          uv run --locked --no-build --no-sync python \
-            ./packaging/linux/flatpak/deps/flatpak-builder-tools/pip/flatpak-pip-generator.py \
-            --runtime="org.kde.Sdk//${KDE_PLATFORM_VERSION}" \
-            --output glad-dependencies \
-            --build-only \
-            --requirements-file=glad-requirements.txt
-
-          # Copy generated pip sources into build dir alongside the manifest
-          mkdir -p build
-          cp glad-dependencies.json build/
-
       - name: Cache Flatpak build
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
@@ -220,7 +197,7 @@ jobs:
             --force-clean \
             --repo=repo \
             --sandbox \
-            --stop-at=cuda build-sunshine ${APP_ID}.yml"
+            --stop-at=sunshine build-sunshine ${APP_ID}.yml"
           cp -r .flatpak-builder copy-of-flatpak-builder
           sudo su "$(whoami)" -c "flatpak run org.flatpak.Builder \
             --arch=${MATRIX_ARCH} \
@@ -268,7 +245,6 @@ jobs:
         run: |
           mkdir -p flathub/modules
           cp "./build/generated-sources.json" "./flathub/"
-          cp "./build/glad-dependencies.json" "./flathub/"
           cp "./build/${APP_ID}.yml" "./flathub/"
           cp "./build/${APP_ID}.metainfo.xml" "./flathub/"
           cp "./package-lock.json" "./flathub/"

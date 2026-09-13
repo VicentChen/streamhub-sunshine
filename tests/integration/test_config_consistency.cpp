@@ -29,18 +29,9 @@ protected:
     // Define the expected mapping between documentation sections and UI tabs
     expectedDocToTabMapping = {
       {"General", "general"},
-      {"Input", "input"},
-      {"Audio/Video", "av"},
       {"Network", "network"},
       {"Config Files", "files"},
       {"Advanced", "advanced"},
-      {"NVIDIA NVENC Encoder", "nv"},
-      {"Intel QuickSync Encoder", "qsv"},
-      {"AMD AMF Encoder", "amd"},
-      {"VideoToolbox Encoder", "vt"},
-      {"VA-API Encoder", "vaapi"},
-      {"Vulkan Encoder", "vulkan"},
-      {"Software Encoder", "sw"}
     };
   }
 
@@ -56,7 +47,6 @@ protected:
       std::regex(R"DELIM(bool_f\s*\(\s*vars\s*,\s*"([^"]+)")DELIM"),
       std::regex(R"DELIM((?:double_f|double_between_f)\s*\(\s*vars\s*,\s*"([^"]+)")DELIM"),
       std::regex(R"DELIM(generic_f\s*\(\s*vars\s*,\s*"([^"]+)")DELIM"),
-      std::regex(R"DELIM(list_prep_cmd_f\s*\(\s*vars\s*,\s*"([^"]+)")DELIM"),
       std::regex(R"DELIM(map_int_int_f\s*\(\s*vars\s*,\s*"([^"]+)")DELIM")
     };
 

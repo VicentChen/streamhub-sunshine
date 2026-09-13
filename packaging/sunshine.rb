@@ -1,10 +1,7 @@
 require "language/node"
 
 class Sunshine < Formula
-  include Language::Python::Virtualenv
 
-  CUDA_VERSION = "13.1".freeze
-  CUDA_FORMULA = "cuda@#{CUDA_VERSION}".freeze
   COVERAGE_LCOV = "coverage.lcov".freeze
   COVERAGE_PROFDATA = "coverage.profdata".freeze
   COVERAGE_XML = "coverage.xml".freeze
@@ -58,8 +55,6 @@ class Sunshine < Formula
   depends_on "miniupnpc"
   depends_on "openssl@3"
   depends_on "opus"
-  depends_on "qtbase"
-  depends_on "qtsvg"
 
   on_sonoma do
     depends_on xcode: ["16.2", :build] # required for jthreads on macos-14
@@ -68,51 +63,14 @@ class Sunshine < Formula
   on_linux do
     depends_on GCC_FORMULA => [:build, :test]
     depends_on "gcovr" => [:build, :test]
-    depends_on "lizardbyte/homebrew/#{CUDA_FORMULA}" => :build
     depends_on "python3" => :build
     depends_on "imagemagick" => :test
-    depends_on "at-spi2-core"
     depends_on "avahi"
-    depends_on "cairo"
-    depends_on "gdk-pixbuf"
     depends_on "glib"
     depends_on "gnu-which"
-    depends_on "harfbuzz"
     depends_on "libcap"
-    depends_on "libdrm"
-    depends_on "libice"
-    depends_on "libsm"
-    depends_on "libva"
-    depends_on "libx11"
-    depends_on "libxcb"
-    depends_on "libxcursor"
-    depends_on "libxext"
-    depends_on "libxfixes"
-    depends_on "libxi"
-    depends_on "libxinerama"
-    depends_on "libxrandr"
-    depends_on "libxtst"
-    depends_on "mesa"
-    depends_on "numactl"
-    depends_on "pango"
-    depends_on "pipewire"
-    depends_on "pulseaudio"
-    depends_on "shaderc"
     depends_on "systemd"
-    depends_on "vulkan-loader"
-    depends_on "wayland"
 
-    # Jinja2 is required at build time by the glad OpenGL/EGL loader generator (Linux only).
-    # Declared as resources per https://docs.brew.sh/Formula-Cookbook#python-dependencies
-    resource "markupsafe" do
-      url "https://files.pythonhosted.org/packages/7e/99/7690b6d4034fffd95959cbe0c02de8deb3098cc577c67bb6a24fe5d7caa7/markupsafe-3.0.3.tar.gz"
-      sha256 "722695808f4b6457b320fdc131280796bdceb04ab50fe1795cd540799ebe1698"
-    end
-
-    resource "jinja2" do
-      url "https://files.pythonhosted.org/packages/df/bf/f7da0350254c0ed7c72f3e33cef02e048281fec7ecec5f032d4aac52226b/jinja2-3.1.6.tar.gz"
-      sha256 "0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d"
-    end
   end
 
   conflicts_with "sunshine-beta", because: "sunshine and sunshine-beta cannot be installed at the same time"
@@ -127,10 +85,6 @@ class Sunshine < Formula
     cause "Requires C++23 support"
   end
 
-  fails_with :gcc do
-    version "13"
-    cause "Array out of bounds error when compiling glad sources"
-  end
 
   def setup_build_environment
     ENV["BRANCH"] = "@GITHUB_BRANCH@"
@@ -139,16 +93,6 @@ class Sunshine < Formula
 
     setup_linux_gcc_environment if OS.linux?
 
-    return unless OS.linux?
-
-    # Install jinja2 (required by the glad OpenGL/EGL loader generator) into a
-    # temporary virtualenv. We pass its Python path to cmake via Python_EXECUTABLE
-    # so glad uses the venv Python that has jinja2, and set GLAD_SKIP_PIP_INSTALL=ON
-    # to prevent cmake from trying to install Python dependencies again.
-    # Follows https://docs.brew.sh/Formula-Cookbook#python-dependencies
-    venv = virtualenv_create(buildpath/"venv", "python3")
-    venv.pip_install resources
-    @glad_python = (buildpath/"venv/bin/python3").to_s
   end
 
   def setup_linux_gcc_environment
@@ -162,7 +106,6 @@ class Sunshine < Formula
     args = %W[
       -DBUILD_WERROR=ON
       -DCMAKE_INSTALL_PREFIX=#{prefix}
-      -DGLAD_SKIP_PIP_INSTALL=ON
       -DHOMEBREW_ALLOW_FETCHCONTENT=ON
       -DOPENSSL_ROOT_DIR=#{formula_opt_prefix("openssl")}
       -DSUNSHINE_ASSETS_DIR=sunshine/assets
@@ -173,7 +116,6 @@ class Sunshine < Formula
     ]
     args << "-DSUNSHINE_EXECUTABLE_PATH=#{opt_bin}/sunshine" if OS.linux?
     # Point cmake at the venv Python that has jinja2 installed (set up in setup_build_environment)
-    args << "-DPython_EXECUTABLE=#{@glad_python}" if @glad_python
     args
   end
 
@@ -224,23 +166,6 @@ class Sunshine < Formula
     ohai "Linking against ICU libraries at: #{icu4c_lib_path}"
   end
 
-  def add_cuda_args(args)
-    return unless OS.linux?
-
-    configure_cuda(args)
-  end
-
-  def configure_cuda(args)
-    cuda_path = Formula["lizardbyte/homebrew/#{CUDA_FORMULA}"]
-    nvcc_path = "#{cuda_path.opt_libexec}/homebrew/bin/nvcc"
-    gcc_path = Formula[GCC_FORMULA]
-
-    args << "-DSUNSHINE_ENABLE_CUDA=ON"
-    args << "-DCMAKE_CUDA_COMPILER:PATH=#{nvcc_path}"
-    args << "-DCMAKE_CUDA_TOOLKIT_ROOT_DIR:PATH=#{cuda_path.opt_libexec}"
-    args << "-DCMAKE_CUDA_HOST_COMPILER=#{gcc_path.opt_bin}/gcc-#{GCC_VERSION}"
-    ohai "CUDA enabled with nvcc at: #{nvcc_path}"
-  end
 
   def release_homebrew_testpath
     testpath_value = ENV.fetch("HOMEBREW_TEST_ARTIFACTS_DIR", "")
@@ -414,7 +339,6 @@ class Sunshine < Formula
     add_test_args(args)
     add_docs_args(args)
     add_boost_args(args)
-    add_cuda_args(args)
     args
   end
 
@@ -477,8 +401,6 @@ class Sunshine < Formula
     system bin/"sunshine", "--version"
 
     if OS.linux?
-      assert_path_exists lib/"udev/rules.d/60-sunshine.rules"
-      assert_path_exists lib/"modules-load.d/60-sunshine.conf"
     end
 
     if IS_UPSTREAM_REPO

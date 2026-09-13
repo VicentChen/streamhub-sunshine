@@ -7,24 +7,14 @@ target_cmake_version="4.3.0"
 doxygen_min="1.10.0"
 _doxygen_min="${doxygen_min//\./_}"  # Convert dots to underscores for URL
 doxygen_max="1.12.0"
-default_cuda_version="13.1.1"
-default_cuda_build="590.48.01"
 
 # Default value for arguments
 appimage_build=0
-cuda_version="$default_cuda_version"
-cuda_build="$default_cuda_build"
-cuda_patches=0
-cuda_system_package=0
-cuda_system_package_name=""
-force_cuda_runfile=0
 num_processors=$(nproc)
 publisher_name="Third Party Publisher"
 publisher_website=""
 publisher_issue_url="https://app.lizardbyte.dev/support"
 skip_cleanup=0
-skip_cuda=0
-skip_libva=0
 skip_package=0
 sudo_cmd="sudo"
 ubuntu_test_repo=0
@@ -34,119 +24,6 @@ step="all"
 AARCH64="aarch64"
 DOXYGEN="doxygen"
 
-function setup_cuda_system_package_environment() {
-  if [[ "$cuda_system_package" == 1 ]]; then
-    # Ubuntu CUDA 13 packages install nvcc here but do not add it to PATH.
-    local cuda_bin_path
-    cuda_bin_path="$(cuda_system_toolkit_path)/bin"
-    if [[ ":${PATH}:" != *":${cuda_bin_path}:"* ]]; then
-      export PATH="${cuda_bin_path}:${PATH}"
-    fi
-  fi
-  return 0
-}
-
-function cuda_system_toolkit_path() {
-  local cuda_minor_version="${cuda_version%.*}"
-  echo "/usr/local/cuda-${cuda_minor_version}"
-}
-
-function cuda_target_dir() {
-  if [[ "$architecture" == "${AARCH64}" ]]; then
-    echo "sbsa-linux"
-  else
-    echo "x86_64-linux"
-  fi
-}
-
-function cuda_math_functions_patch_applied() {
-  local cuda_toolkit_path=$1
-  local math_functions_file
-  math_functions_file="${cuda_toolkit_path}/targets/$(cuda_target_dir)/include/crt/math_functions.h"
-
-  if [[ ! -f "$math_functions_file" ]]; then
-    return 1
-  fi
-
-  grep -Fq "rsqrt(double x) noexcept (true)" "$math_functions_file" && \
-    grep -Fq "rsqrtf(float x) noexcept (true)" "$math_functions_file" && \
-    grep -Fq "__func__(double rsqrt(double a) noexcept (true));" "$math_functions_file" && \
-    grep -Fq "__func__(float rsqrtf(float a) noexcept (true));" "$math_functions_file"
-}
-
-function apply_cuda_patches() {
-  local cuda_toolkit_path=$1
-
-  if [[ "$cuda_patches" != 1 ]]; then
-    return 0
-  fi
-
-  if [[ ! -d "$cuda_toolkit_path" ]]; then
-    echo "CUDA toolkit path not found: $cuda_toolkit_path"
-    return 1
-  fi
-
-  if cuda_math_functions_patch_applied "$cuda_toolkit_path"; then
-    echo "CUDA math_functions.h patch already applied"
-    return 0
-  fi
-
-  echo "Applying CUDA patches"
-  local patch_dir="${script_dir}/../packaging/linux/patches/${architecture}"
-  local patch_file=""
-
-  # Select the patch based on the CUDA major version, not the distro version.
-  # see https://forums.developer.nvidia.com/t/error-exception-specification-is-incompatible-for-cospi-sinpi-cospif-sinpif-with-glibc-2-41/323591/3
-  local cuda_major="${cuda_version%%.*}"
-  if [[ "${cuda_major}" -eq 12 ]]; then
-    # CUDA 12.x: the extern declarations lack noexcept(true); add it to match glibc 2.41.
-    patch_file="${patch_dir}/cuda-12-math_functions.patch"
-  elif [[ "${cuda_major}" -eq 13 ]]; then
-    # CUDA 13.x: the extern declarations already have noexcept(true), but the __func__()
-    # macro invocations at the bottom still lack it, causing a redeclaration conflict.
-    patch_file="${patch_dir}/cuda-13-math_functions.patch"
-  else
-    echo "Warning: no math_functions.h patch available for CUDA ${cuda_major}.x, skipping."
-  fi
-
-  if [[ -n "$patch_file" ]]; then
-    if [[ -f "$patch_file" ]]; then
-      echo "Applying patch: $patch_file"
-      ${sudo_cmd} patch -p2 \
-        --backup \
-        --directory="$cuda_toolkit_path" \
-        --verbose \
-        < "$patch_file"
-    else
-      echo "Patch file not found: $patch_file"
-    fi
-  else
-    echo "No CUDA patch required for ${distro} ${version}"
-  fi
-}
-
-# Reusable function to detect nvcc path
-function detect_nvcc_path() {
-  local nvcc_path=""
-
-  # First check for system-installed CUDA
-  nvcc_path=$(command -v nvcc 2>/dev/null) || true
-  if [[ -n "$nvcc_path" ]]; then
-    echo "$nvcc_path"
-    return 0
-  fi
-
-  # Then check for locally installed CUDA in build directory
-  if [[ -f "${build_dir}/cuda/bin/nvcc" ]]; then
-    echo "${build_dir}/cuda/bin/nvcc"
-    return 0
-  fi
-
-  # No CUDA found
-  return 1
-}
-
-# Reusable function to setup NVM environment
 function setup_nvm_environment() {
   # Only setup NVM if it should be used for this distro
   if [[ "$nvm_node" == 1 ]]; then
@@ -179,18 +56,12 @@ Options:
   -h, --help               Display this help message.
   -s, --sudo-off           Disable sudo command.
   --appimage-build         Compile for AppImage, this will not create the AppImage, just the executable.
-  --cuda-patches           Apply cuda patches. Enabled automatically on Ubuntu 26.04.
-  --cuda-runfile           Force CUDA installation from the NVIDIA runfile.
-  --cuda-system-package=*  The CUDA package to install when system CUDA is enabled.
-                           Default for Ubuntu 26.04 is cuda-toolkit-13-1.
   --num-processors         The number of processors to use for compilation. Default is the value of 'nproc'.
   --publisher-name         The name of the publisher (not developer) of the application.
   --publisher-website      The URL of the publisher's website.
   --publisher-issue-url    The URL of the publisher's support site or issue tracker.
                            If you provide a modified version of Sunshine, we kindly request that you use your own url.
   --skip-cleanup           Do not restore the original gcc alternatives, or the math-vector.h file.
-  --skip-cuda              Skip CUDA installation.
-  --skip-libva             Skip libva installation. This will automatically be enabled if passing --appimage-build.
   --skip-package           Skip creating DEB, or RPM package.
   --ubuntu-test-repo       Install ppa:ubuntu-toolchain-r/test repo on Ubuntu.
   --step                   Which step(s) to run: deps, cmake, validation, build, package, cleanup, or all (default: all)
@@ -218,16 +89,6 @@ while getopts ":hs-:" opt; do
         help) _usage 0 ;;
         appimage-build)
           appimage_build=1
-          skip_libva=1
-          ;;
-        cuda-patches)
-          cuda_patches=1
-          ;;
-        cuda-runfile)
-          force_cuda_runfile=1
-          ;;
-        cuda-system-package=*)
-          cuda_system_package_name="${OPTARG#*=}"
           ;;
         num-processors=*)
           num_processors="${OPTARG#*=}"
@@ -242,8 +103,6 @@ while getopts ":hs-:" opt; do
           publisher_issue_url="${OPTARG#*=}"
           ;;
         skip-cleanup) skip_cleanup=1 ;;
-        skip-cuda) skip_cuda=1 ;;
-        skip-libva) skip_libva=1 ;;
         skip-package) skip_package=1 ;;
         sudo-off) sudo_cmd="" ;;
         ubuntu-test-repo) ubuntu_test_repo=1 ;;
@@ -279,44 +138,15 @@ function add_arch_deps() {
     "gcc${gcc_version}-libs"
     'git'
     'graphviz'
+    'glib2'
     'libcap'
-    'libdrm'
-    'libevdev'
-    'libmfx'
-    'libpulse'
-    'libva'
-    'libx11'
-    'libxcb'
-    'libxfixes'
-    'libxrandr'
-    'libxtst'
     'miniupnpc'
     'ninja'
     'nodejs'
     'npm'
-    'numactl'
     'openssl'
     'opus'
-    'python-jinja'  # glad OpenGL/EGL loader generator
-    'qt6-base'
-    'qt6-svg'
-    'shaderc'
-    'udev'
-    'vulkan-icd-loader'
-    'wayland'
   )
-
-  if [[ "$skip_libva" == 0 ]]; then
-    dependencies+=(
-      "libva"  # VA-API
-    )
-  fi
-
-  if [[ "$skip_cuda" == 0 ]]; then
-    dependencies+=(
-      "cuda"  # VA-API
-    )
-  fi
   return 0
 }
 
@@ -334,56 +164,18 @@ function add_debian_based_deps() {
     "gcc-${gcc_version}"
     "g++-${gcc_version}"
     "git"
-    "glslang-tools"  # Vulkan shader compiler
     "graphviz"
-    "imagemagick"  # necessary for system tray screenshots in unit tests
-    "libcap-dev"  # KMS
     "libcurl4-openssl-dev"
-    "libdrm-dev"  # KMS
-    "libevdev-dev"
-    "libgbm-dev"
+    "libglib2.0-dev"
     "libminiupnpc-dev"
-    "libnuma-dev"
     "libopus-dev"
-    "libpipewire-0.3-dev"
-    "libpulse-dev"
     "libssl-dev"
     "libsystemd-dev"
-    "libudev-dev"
-    "libwayland-dev"  # Wayland
-    "libx11-dev"  # X11
-    "libxcb-shm0-dev"  # X11
-    "libxcb-xfixes0-dev"  # X11
-    "libxcb1-dev"  # X11
-    "libxfixes-dev"  # X11
-    "libxrandr-dev"  # X11
-    "libxtst-dev"  # X11
-    "libvulkan-dev"  # Vulkan
     "ninja-build"
     "npm"  # web-ui
-    "python3-jinja2"  # glad OpenGL/EGL loader generator
-    "qt6-base-dev"
     "systemd"
-    "udev"
-    "wget"  # necessary for cuda install with `run` file
-    "xvfb"  # necessary for headless unit testing
+    "wget"
   )
-
-  # Ubuntu 22.04 uses a different package name for Qt6 SVG
-  if [[ "$distro" == "ubuntu" ]] && [[ "$version" == "22.04" ]]; then
-    dependencies+=(
-      "libgl-dev"  # OpenGL development headers, needed for qt6-svg
-      "libqt6svg6-dev"
-    )
-  else
-    dependencies+=("qt6-svg-dev")
-  fi
-
-  if [[ "$skip_libva" == 0 ]]; then
-    dependencies+=(
-      "libva-dev"  # VA-API
-    )
-  fi
   return 0
 }
 
@@ -405,23 +197,11 @@ function add_debian_deps() {
 }
 
 function add_ubuntu_deps() {
-  # Enable universe; qt6-base-dev and several other required packages live there.
+  # Enable universe for the required development packages.
   $package_install_command "software-properties-common"
   ${sudo_cmd} add-apt-repository universe -y
   add_test_ppa
   add_debian_based_deps
-
-  if [[ "$skip_cuda" == 0 ]] && [[ "$cuda_system_package" == 1 ]]; then
-    if [[ -z "$cuda_system_package_name" ]]; then
-      echo "CUDA system package was requested, but no package name was configured."
-      return 1
-    fi
-
-    echo "Using CUDA system package: $cuda_system_package_name"
-    dependencies+=(
-      "$cuda_system_package_name"
-    )
-  fi
 
   if [[ "$(printf '%s\n' "$version" "24.04" | sort -V | head -n1)" == "24.04" ]]; then
     dependencies+=(
@@ -440,109 +220,19 @@ function add_fedora_deps() {
     "gcc${gcc_version}"
     "gcc${gcc_version}-c++"
     "git"
-    "glslc"
     "graphviz"
-    "ImageMagick"  # necessary for system tray screenshots in unit tests
     "libappstream-glib"
-    "libcap-devel"
     "libcurl-devel"
-    "libdrm-devel"
-    "libevdev-devel"
-    "libX11-devel"  # X11
-    "libxcb-devel"  # X11
-    "libXcursor-devel"  # X11
-    "libXfixes-devel"  # X11
-    "libXi-devel"  # X11
-    "libXinerama-devel"  # X11
-    "libXrandr-devel"  # X11
-    "libXtst-devel"  # X11
-    "mesa-libGL-devel"
-    "mesa-libgbm-devel"
+    "glib2-devel"
     "miniupnpc-devel"
     "ninja-build"
     "npm"
-    "numactl-devel"
     "openssl-devel"
     "opus-devel"
-    "pipewire-devel"
-    "pulseaudio-libs-devel"
-    "python3-jinja2"  # glad OpenGL/EGL loader generator
-    "qt6-qtbase-devel"
-    "qt6-qtsvg-devel"
     "rpm-build"  # if you want to build an RPM binary package
-    "vulkan-loader-devel"
-    "wget"  # necessary for cuda install with `run` file
-    "which"  # necessary for cuda install with `run` file
-    "xorg-x11-server-Xvfb"  # necessary for headless unit testing
+    "wget"
+    "which"
   )
-
-  if [[ "$skip_libva" == 0 ]]; then
-    dependencies+=(
-      "libva-devel"  # VA-API
-    )
-  fi
-  return 0
-}
-
-function install_cuda() {
-  setup_cuda_system_package_environment
-
-  # Check if CUDA is already available
-  if [[ "$force_cuda_runfile" == 1 ]] && [[ -f "${build_dir}/cuda/bin/nvcc" ]]; then
-    apply_cuda_patches "${build_dir}/cuda"
-    return
-  elif [[ "$force_cuda_runfile" == 0 ]] && detect_nvcc_path > /dev/null 2>&1; then
-    if [[ "$cuda_system_package" == 1 ]]; then
-      apply_cuda_patches "$(cuda_system_toolkit_path)"
-    fi
-    return
-  fi
-
-  if [[ "$cuda_system_package" == 1 ]]; then
-    echo "CUDA system package '$cuda_system_package_name' was requested, but nvcc was not found after dependency installation."
-    return 1
-  fi
-
-  local cuda_override_arg=""
-  if [[ "$distro" == "fedora" ]]; then
-    cuda_override_arg="--override"
-  fi
-
-  local cuda_prefix="https://developer.download.nvidia.com/compute/cuda/"
-  local cuda_suffix=""
-  if [[ "$architecture" == "${AARCH64}" ]]; then
-    local cuda_suffix="_sbsa"
-  fi
-
-  if [[ "$architecture" == "${AARCH64}" ]]; then
-    # we need to patch the math-vector.h file for aarch64 fedora
-    # back up /usr/include/bits/math-vector.h
-    math_vector_file=""
-    if [[ "$distro" == "ubuntu" ]] || [[ "$version" == "24.04" ]]; then
-      math_vector_file="/usr/include/aarch64-linux-gnu/bits/math-vector.h"
-    elif [[ "$distro" == "fedora" ]]; then
-      math_vector_file="/usr/include/bits/math-vector.h"
-    fi
-
-    if [[ -n "$math_vector_file" ]]; then
-      # patch headers https://bugs.launchpad.net/ubuntu/+source/mumax3/+bug/2032624
-      ${sudo_cmd} cp "$math_vector_file" "$math_vector_file.bak"
-      ${sudo_cmd} sed -i 's/__Float32x4_t/int/g' "$math_vector_file"
-      ${sudo_cmd} sed -i 's/__Float64x2_t/int/g' "$math_vector_file"
-      ${sudo_cmd} sed -i 's/__SVFloat32_t/float/g' "$math_vector_file"
-      ${sudo_cmd} sed -i 's/__SVFloat64_t/float/g' "$math_vector_file"
-      ${sudo_cmd} sed -i 's/__SVBool_t/int/g' "$math_vector_file"
-    fi
-  fi
-
-  local url="${cuda_prefix}${cuda_version}/local_installers/cuda_${cuda_version}_${cuda_build}_linux${cuda_suffix}.run"
-  echo "cuda url: ${url}"
-  wget "$url" --max-redirect=0 --progress=bar:force:noscroll -q --show-progress -O "${build_dir}/cuda.run"
-  chmod a+x "${build_dir}/cuda.run"
-  "${build_dir}/cuda.run" --silent --toolkit --toolkitpath="${build_dir}/cuda" --no-opengl-libs --no-man-page --no-drm "$cuda_override_arg"
-  rm "${build_dir}/cuda.run"
-
-  apply_cuda_patches "${build_dir}/cuda"
   return 0
 }
 
@@ -665,10 +355,6 @@ function run_step_deps() {
     nvm use node
   fi
 
-  # run the cuda install
-  if [[ "$skip_cuda" == 0 ]]; then
-    install_cuda
-  fi
   return 0
 }
 
@@ -677,20 +363,7 @@ function run_step_cmake() {
 
   # Setup NVM environment if needed (for web UI builds)
   setup_nvm_environment
-  setup_cuda_system_package_environment
-  if [[ "$skip_cuda" == 0 ]] && [[ "$cuda_system_package" == 1 ]]; then
-    apply_cuda_patches "$(cuda_system_toolkit_path)"
-  fi
 
-  # Detect CUDA path using the reusable function
-  nvcc_path=""
-  if [[ "$skip_cuda" == 0 ]]; then
-    if [[ "$force_cuda_runfile" == 1 ]] && [[ -f "${build_dir}/cuda/bin/nvcc" ]]; then
-      nvcc_path="${build_dir}/cuda/bin/nvcc"
-    else
-      nvcc_path=$(detect_nvcc_path)
-    fi
-  fi
 
   #set gcc version based on distros
   export CC=gcc-${gcc_version}
@@ -706,11 +379,6 @@ function run_step_cmake() {
     "-DCMAKE_INSTALL_PREFIX=/usr"
     "-DSUNSHINE_ASSETS_DIR=share/sunshine"
     "-DSUNSHINE_EXECUTABLE_PATH=/usr/bin/sunshine"
-    "-DSUNSHINE_ENABLE_DRM=ON"
-    "-DSUNSHINE_ENABLE_KWIN=ON"
-    "-DSUNSHINE_ENABLE_PORTAL=ON"
-    "-DSUNSHINE_ENABLE_WAYLAND=ON"
-    "-DSUNSHINE_ENABLE_X11=ON"
   )
 
   if [[ "$appimage_build" == 1 ]]; then
@@ -733,16 +401,6 @@ function run_step_cmake() {
     cmake_args+=("-DBUILD_DOCS=OFF")
   fi
 
-  # Handle CUDA
-  if [[ "$skip_cuda" == 0 ]]; then
-    cmake_args+=("-DSUNSHINE_ENABLE_CUDA=ON")
-    if [[ -n "$nvcc_path" ]]; then
-      cmake_args+=("-DCMAKE_CUDA_COMPILER:PATH=$nvcc_path")
-      cmake_args+=("-DCMAKE_CUDA_HOST_COMPILER=gcc-${gcc_version}")
-    fi
-  else
-    cmake_args+=("-DSUNSHINE_ENABLE_CUDA=OFF")
-  fi
 
   # Cmake stuff here
   mkdir -p "build"
@@ -887,8 +545,6 @@ elif grep -q '^ID=fedora$' /etc/os-release && grep -q '^VERSION_ID=45$' /etc/os-
   version="45"
   package_update_command="${sudo_cmd} dnf update -y"
   package_install_command="${sudo_cmd} dnf install -y"
-  cuda_version="13.1.1"
-  cuda_build="590.48.01"
   gcc_version="15"
   nvm_node=0
 elif grep -q "Ubuntu 22.04" /etc/os-release; then
@@ -924,13 +580,6 @@ elif grep -q 'VERSION_ID="26.04"' /etc/os-release; then
   version="26.04"
   package_update_command="${sudo_cmd} apt-get update"
   package_install_command="${sudo_cmd} apt-get install -y"
-  cuda_patches=1
-  if [[ "$force_cuda_runfile" == 0 ]]; then
-    cuda_system_package=1
-    if [[ -z "$cuda_system_package_name" ]]; then
-      cuda_system_package_name="cuda-toolkit-13-1"
-    fi
-  fi
   gcc_version="14"
   nvm_node=0
 else

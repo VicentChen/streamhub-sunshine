@@ -1,3 +1,9 @@
+> 本 fork 已移除系统托盘。本文中的托盘操作属于上游历史说明，不再适用；本项目入口见 [模块 README](../README.md)。
+
+> StreamHub fork：本机采集、编码、显示管理与虚拟输入已移除；下文涉及这些功能的上游指南仅供历史参考。当前构建、依赖和验证入口见 [完整裁剪记录](streamhub/slimming-core.md)。
+
+> StreamHub fork 已移除本机应用执行、准备/撤销命令和命令环境变量；本页相关上游示例不再适用。当前行为见 [应用执行裁剪记录](streamhub/slimming-applications.md)。
+
 # Getting Started
 
 The recommended method for running Sunshine is to use the [binaries](#binaries) included in the

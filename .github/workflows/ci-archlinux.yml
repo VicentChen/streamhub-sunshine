@@ -16,9 +16,7 @@ jobs:
   build_archlinux:
     name: Archlinux
     env:
-      _use_cuda: true
       _run_unit_tests: true
-      _support_headless_testing: true
       BRANCH: ${{ github.head_ref || github.ref_name }}
       BUILD_VERSION: ${{ inputs.release_version }}
       CLONE_URL: >-
@@ -64,10 +62,8 @@ jobs:
           pacman -Syu --disable-download-timeout --needed --noconfirm \
             base-devel \
             cmake \
-            cuda \
             git \
             namcap \
-            xorg-server-xvfb
           pacman -Scc --noconfirm
 
       - name: Checkout
@@ -121,7 +117,6 @@ jobs:
 
       - name: Build PKGBUILD
         env:
-          DISPLAY: :1
         id: build
         shell: bash
         working-directory: pkg
@@ -129,34 +124,18 @@ jobs:
           # Add problem matcher
           echo "::add-matcher::.github/matchers/gcc.json"
 
-          source /etc/profile  # ensure cuda is in the PATH
 
-          # Run Xvfb for headless testing
-          Xvfb "${DISPLAY}" -screen 0 1024x768x24 &
 
           # Check PKGBUILD
           sudo -u builder namcap -i PKGBUILD
 
           # Export PKGBUILD options so they're available to makepkg
-          export _use_cuda="${_use_cuda}"
           export _run_unit_tests="${_run_unit_tests}"
-          export _support_headless_testing="${_support_headless_testing}"
 
           # Build the package as builder user (pass through environment variables)
           sudo -u builder env \
-            _use_cuda="${_use_cuda}" \
             _run_unit_tests="${_run_unit_tests}" \
-            _support_headless_testing="${_support_headless_testing}" \
             makepkg -si --noconfirm
-
-          # Native packages must install the host rule used by dynamically
-          # created libvirtualhid hidraw and input event nodes.
-          test -f /usr/lib/udev/rules.d/60-sunshine.rules
-          grep -Fq 'IMPORT{parent}="HID_*"' \
-            /usr/lib/udev/rules.d/60-sunshine.rules
-          grep -Fq 'ENV{HID_PHYS}=="libvirtualhid/uhid/*"' \
-            /usr/lib/udev/rules.d/60-sunshine.rules
-          udevadm verify /usr/lib/udev/rules.d/60-sunshine.rules
 
           # Remove debug package
           rm -f sunshine-debug*.pkg.tar.zst

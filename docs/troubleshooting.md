@@ -1,5 +1,7 @@
 # Troubleshooting
 
+> StreamHub fork：本机采集、编码、显示管理与虚拟输入已移除；下文涉及这些功能的上游指南仅供历史参考。当前构建、依赖和验证入口见 [完整裁剪记录](streamhub/slimming-core.md)。
+
 ## General
 
 ### Forgotten Credentials

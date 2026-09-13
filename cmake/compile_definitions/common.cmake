@@ -59,67 +59,6 @@ elseif(UNIX)
     endif()
 endif()
 
-# libvirtualhid
-add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/libvirtualhid")
-list(APPEND SUNSHINE_EXTERNAL_LIBRARIES libvirtualhid::libvirtualhid)
-list(APPEND PLATFORM_TARGET_FILES
-        "${CMAKE_SOURCE_DIR}/src/platform/virtualhid_input.h"
-        "${CMAKE_SOURCE_DIR}/src/platform/virtualhid_input.cpp")
-
-# build libevdev before the libvirtualhid target when using the ExternalProject fallback
-if(EXTERNAL_PROJECT_LIBEVDEV_USED AND TARGET libvirtualhid)
-    add_dependencies(libvirtualhid libevdev)
-endif()
-
-set(NVENC_PUBLIC_SOURCES
-        "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_config.h"
-        "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_d3d11_interface.h"
-        "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_dynamic_factory.cpp"
-        "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_dynamic_factory.h"
-        "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_dynamic_factory_versions.h"
-        "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_encoded_frame.h"
-        "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_encoder.h"
-        "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_shared_dll.h"
-        "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_version.h"
-)
-set(NVENC_SOURCES ${NVENC_PUBLIC_SOURCES})
-
-if(WIN32)
-    set(NVENC_IMPLEMENTATION_SOURCES
-            "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_base.cpp"
-            "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_d3d11.cpp"
-            "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_d3d11_native.cpp"
-            "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_d3d11_on_cuda.cpp"
-            "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_dynamic_factory_impl.cpp"
-            "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_utils.cpp"
-    )
-
-    # Add a version-isolated NVENC implementation object library.
-    # add_nvenc_sdk_implementation: args = `target_name`, `sdk_version`, `sdk_include_dir`
-    function(add_nvenc_sdk_implementation target_name sdk_version sdk_include_dir)
-        add_library(${target_name} OBJECT ${NVENC_IMPLEMENTATION_SOURCES})
-        target_include_directories(${target_name} BEFORE PRIVATE "${sdk_include_dir}")
-        target_compile_definitions(${target_name} PRIVATE
-                NVENC_FACTORY_SUFFIX=${sdk_version}
-                NVENC_NAMESPACE=nvenc_${sdk_version}
-                NVENC_SDK_VERSION=${sdk_version}
-        )
-        target_compile_options(${target_name} PRIVATE ${SUNSHINE_COMPILE_OPTIONS})
-    endfunction()
-
-    add_nvenc_sdk_implementation(nvenc_sdk_1100 1100 "${NV_CODEC_HEADERS_11_INCLUDE_DIR}")
-    add_nvenc_sdk_implementation(nvenc_sdk_1200 1200 "${NV_CODEC_HEADERS_12_INCLUDE_DIR}")
-    add_nvenc_sdk_implementation(nvenc_sdk_1300 1300 "${NV_CODEC_HEADERS_13_INCLUDE_DIR}")
-
-    list(APPEND NVENC_SOURCES
-            $<TARGET_OBJECTS:nvenc_sdk_1100>
-            $<TARGET_OBJECTS:nvenc_sdk_1200>
-            $<TARGET_OBJECTS:nvenc_sdk_1300>
-    )
-endif()
-
-list(APPEND PLATFORM_TARGET_FILES ${NVENC_SOURCES})
-
 set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Input.h"
         "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Rtsp.h"
@@ -130,13 +69,10 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/nanors/rs.c"
         "${CMAKE_SOURCE_DIR}/src/upnp.cpp"
         "${CMAKE_SOURCE_DIR}/src/upnp.h"
-        "${CMAKE_SOURCE_DIR}/src/cbs.cpp"
         "${CMAKE_SOURCE_DIR}/src/utility.h"
         "${CMAKE_SOURCE_DIR}/src/uuid.h"
         "${CMAKE_SOURCE_DIR}/src/config.h"
         "${CMAKE_SOURCE_DIR}/src/config.cpp"
-        "${CMAKE_SOURCE_DIR}/src/display_device.h"
-        "${CMAKE_SOURCE_DIR}/src/display_device.cpp"
         "${CMAKE_SOURCE_DIR}/src/entry_handler.cpp"
         "${CMAKE_SOURCE_DIR}/src/entry_handler.h"
         "${CMAKE_SOURCE_DIR}/src/file_handler.cpp"
@@ -159,10 +95,7 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/rtsp.h"
         "${CMAKE_SOURCE_DIR}/src/stream.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream.h"
-        "${CMAKE_SOURCE_DIR}/src/video.cpp"
         "${CMAKE_SOURCE_DIR}/src/video.h"
-        "${CMAKE_SOURCE_DIR}/src/video_colorspace.cpp"
-        "${CMAKE_SOURCE_DIR}/src/video_colorspace.h"
         "${CMAKE_SOURCE_DIR}/src/input.cpp"
         "${CMAKE_SOURCE_DIR}/src/input.h"
         "${CMAKE_SOURCE_DIR}/src/audio.cpp"
@@ -173,8 +106,6 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/network.cpp"
         "${CMAKE_SOURCE_DIR}/src/network.h"
         "${CMAKE_SOURCE_DIR}/src/move_by_copy.h"
-        "${CMAKE_SOURCE_DIR}/src/system_tray.cpp"
-        "${CMAKE_SOURCE_DIR}/src/system_tray.h"
         "${CMAKE_SOURCE_DIR}/src/task_pool.h"
         "${CMAKE_SOURCE_DIR}/src/thread_pool.h"
         "${CMAKE_SOURCE_DIR}/src/thread_safe.h"
@@ -205,37 +136,16 @@ include_directories(
         "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/nanors/deps/obl"
         ${OPENSSL_INCLUDE_DIR}
         ${Opus_INCLUDE_DIR}
-        ${FFMPEG_INCLUDE_DIRS}
-        ${Boost_INCLUDE_DIRS}  # has to be the last, or we get runtime error on macOS ffmpeg encoder
+        ${Boost_INCLUDE_DIRS}
 )
-
-if(WIN32)
-    include_directories(BEFORE SYSTEM "${NV_CODEC_HEADERS_13_INCLUDE_DIR}")
-else()
-    include_directories(
-            BEFORE SYSTEM
-            "${CMAKE_SOURCE_DIR}/third-party/build-deps/third-party/FFmpeg/nv-codec-headers/include"
-    )
-endif()
 
 list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
         ${MINIUPNP_LIBRARIES}
         ${CMAKE_THREAD_LIBS_INIT}
         enet
-        libdisplaydevice::display_device
         lizardbyte::common
         nlohmann_json::nlohmann_json
         ${Opus_LIBRARY}
-        ${FFMPEG_LIBRARIES}
         ${Boost_LIBRARIES}
         ${OPENSSL_LIBRARIES}
         ${PLATFORM_LIBRARIES})
-
-# tray icon
-if(SUNSHINE_ENABLE_TRAY)
-    list(APPEND SUNSHINE_EXTERNAL_LIBRARIES tray::tray)
-else()
-    set(SUNSHINE_TRAY 0)
-    message(STATUS "Tray icon disabled")
-endif()
-list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_TRAY=${SUNSHINE_TRAY})

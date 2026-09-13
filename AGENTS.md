@@ -5,6 +5,12 @@
 - Communicate through the public StreamHub protocol; keep conversions to Sunshine internal types inside this repository.
 - Preserve Sunshine's GPL license and third-party notices; do not move GPL implementation code into the MIT protocol library or the independent StreamHub software.
 
+## Documentation
+
+- Keep StreamHub-specific fork documentation in `docs/streamhub/`, with navigation in its `README.md` and the module `README.md`.
+- Preserve upstream documentation paths; assess applicability before marking content obsolete or archiving it.
+- Link to the parent project architecture and public protocol specifications instead of duplicating them.
+
 ## Upstream development guidance
 
 On Windows we use msys2 and ucrt64 to compile.

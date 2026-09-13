@@ -53,7 +53,6 @@ jobs:
           arch: ${{ matrix.arch }}
           cpu: ${{ steps.processor_count.outputs.PROCESSOR_COUNT }}
           envs: 'BRANCH BUILD_VERSION COMMIT PYTHON_VERSION'
-          # TODO: there is no libcap for freebsd... we need graphics/libdrm if we find a way to use libcap
           prepare: |
             set -e
 
@@ -61,40 +60,22 @@ jobs:
             pkg upgrade -y
             pkg install -y \
               audio/opus \
-              audio/pulseaudio \
               devel/boost-all \
               devel/cmake-core \
               devel/doxygen \
-              devel/evdev-proto \
               devel/git \
-              devel/libevdev \
               devel/llvm${{ env.FREEBSD_CLANG_VERSION }} \
               devel/ninja \
               devel/pkgconf \
               devel/uv \
-              devel/qt6-base \
               ftp/curl \
               graphics/graphviz \
-              graphics/libdrm \
-              graphics/qt6-svg \
-              graphics/shaderc \
-              graphics/vulkan-headers \
-              graphics/vulkan-loader \
-              graphics/wayland \
               lang/python314 \
-              multimedia/libva \
-              multimedia/pipewire \
               net/miniupnpc \
               ports-mgmt/pkg \
               security/openssl \
               shells/bash \
-              www/npm-node22 \
-              x11/libX11 \
-              x11/libxcb \
-              x11/libXfixes \
-              x11/libXrandr \
-              x11/libXtst \
-              x11-servers/xorg-server
+              www/npm-node22
 
             # create symlink for shebang bash compatibility
             ln -s /usr/local/bin/bash /bin/bash
@@ -104,16 +85,6 @@ jobs:
           release: ${{ matrix.bsd_release }}
           run: |
             set -e
-            # Keep FreeBSD off Sunshine's default dependency path: lizardbyte-common[c]
-            # includes clang-format, which has no FreeBSD wheel and is slow to build.
-            set -- \
-              --locked \
-              --only-group glad \
-              --python "/usr/local/bin/python${PYTHON_VERSION}" \
-              --no-python-downloads \
-              --no-install-project
-            # uv.lock pins external artifacts; the reviewed vendored glad2 build hook is required.
-            uv sync "$@"  # NOSONAR(githubactions:S8541, githubactions:S8544)
             set -- \
               --project third-party/lizardbyte-common \
               --locked \
@@ -149,16 +120,8 @@ jobs:
             -DBUILD_WERROR=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr/local \
-            -DGLAD_SKIP_PIP_INSTALL=ON \
-            -DPython_EXECUTABLE="${GITHUB_WORKSPACE}/.venv/bin/python" \
             -DSUNSHINE_ASSETS_DIR=share/assets \
             -DSUNSHINE_EXECUTABLE_PATH=/usr/local/bin/sunshine \
-            -DSUNSHINE_ENABLE_CUDA=OFF \
-            -DSUNSHINE_ENABLE_DRM=OFF \
-            -DSUNSHINE_ENABLE_KWIN=ON \
-            -DSUNSHINE_ENABLE_PORTAL=ON \
-            -DSUNSHINE_ENABLE_WAYLAND=ON \
-            -DSUNSHINE_ENABLE_X11=ON \
             -DSUNSHINE_PUBLISHER_NAME="${GITHUB_REPOSITORY_OWNER}" \
             -DSUNSHINE_PUBLISHER_WEBSITE="https://app.lizardbyte.dev" \
             -DSUNSHINE_PUBLISHER_ISSUE_URL="https://app.lizardbyte.dev/support"
@@ -217,13 +180,9 @@ jobs:
           set -e
           cd "${GITHUB_WORKSPACE}/build/tests"
 
-          export DISPLAY=:1
-          Xvfb ${DISPLAY} -screen 0 1024x768x24 &
-          XVFB_PID=$!
 
           ./test_sunshine --gtest_color=yes --gtest_output=xml:test_results.xml
 
-          kill ${XVFB_PID}
 
       - name: Generate gcov report
         id: test_report

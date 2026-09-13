@@ -1,35 +1,12 @@
 <script setup>
 import Checkbox from '../../Checkbox.vue'
 import { ref } from 'vue'
-import {
-  Play,
-  Plus,
-  Shield,
-  Trash2,
-  Undo,
-} from '@lucide/vue'
-
 const props = defineProps({
   platform: String,
   config: Object
 })
 const config = ref(props.config)
 
-function addCmd() {
-  let template = {
-    do: "",
-    undo: "",
-  };
-
-  if (props.platform === 'windows') {
-    template = { ...template, elevated: false };
-  }
-  config.value.global_prep_cmd.push(template);
-}
-
-function removeCmd(index) {
-  config.value.global_prep_cmd.splice(index,1)
-}
 </script>
 
 <template>
@@ -87,52 +64,6 @@ function removeCmd(index) {
       <div class="form-text">{{ $t('config.min_log_level_desc') }}</div>
     </div>
 
-    <!-- Global Prep Commands -->
-    <div id="global_prep_cmd" class="mb-3 d-flex flex-column">
-      <label class="form-label">{{ $t('config.global_prep_cmd') }}</label>
-      <div class="form-text">{{ $t('config.global_prep_cmd_desc') }}</div>
-      <table class="table" v-if="config.global_prep_cmd.length > 0">
-        <thead>
-        <tr>
-          <th scope="col"><Play :size="16" /> {{ $t('_common.do_cmd') }}</th>
-          <th scope="col"><Undo :size="16" /> {{ $t('_common.undo_cmd') }}</th>
-          <th scope="col" v-if="platform === 'windows'">
-            <Shield :size="16" /> {{ $t('_common.run_as') }}
-          </th>
-          <th scope="col"></th>
-        </tr>
-        </thead>
-        <tbody>
-        <tr v-for="(c, i) in config.global_prep_cmd">
-          <td>
-            <input type="text" class="form-control monospace" v-model="c.do" />
-          </td>
-          <td>
-            <input type="text" class="form-control monospace" v-model="c.undo" />
-          </td>
-          <td v-if="platform === 'windows'" class="align-middle">
-            <Checkbox :id="'prep-cmd-admin-' + i"
-                      label="_common.elevated"
-                      desc=""
-                      v-model="c.elevated"
-            ></Checkbox>
-          </td>
-          <td>
-            <button class="btn btn-danger" @click="removeCmd(i)">
-              <Trash2 :size="16" />
-            </button>
-            <button class="btn btn-success" @click="addCmd">
-              <Plus :size="16" />
-            </button>
-          </td>
-        </tr>
-        </tbody>
-      </table>
-      <button class="ms-0 mt-2 btn btn-success" style="margin: 0 auto" @click="addCmd">
-        &plus; {{ $t('config.add') }}
-      </button>
-    </div>
-
     <!-- Notify Pre-Releases -->
     <Checkbox class="mb-3"
               id="notify_pre_releases"
@@ -141,13 +72,6 @@ function removeCmd(index) {
               default="false"
     ></Checkbox>
 
-    <!-- Enable system tray -->
-    <Checkbox class="mb-3"
-              id="system_tray"
-              locale-prefix="config"
-              v-model="config.system_tray"
-              default="true"
-    ></Checkbox>
   </div>
 </template>
 

@@ -758,7 +758,6 @@ namespace rtsp_stream {
 
   void terminate_sessions() {
     server.clear(true);
-    input::terminate_gamepads();
   }
 
   /**
@@ -766,7 +765,6 @@ namespace rtsp_stream {
    */
   void terminate_sessions_by_cert(std::string_view cert) {
     server.clear_by_cert(cert);
-    input::terminate_gamepads(cert);
   }
 
   /**
@@ -924,7 +922,8 @@ namespace rtsp_stream {
     std::stringstream ss;
 
     // Tell the client about our supported features
-    ss << "a=x-ss-general.featureFlags:" << (uint32_t) platf::get_capabilities() << std::endl;
+    const auto feature_flags = input::supports_controller_touch_events.load(std::memory_order_relaxed) ? LI_FF_CONTROLLER_TOUCH_EVENTS : 0;
+    ss << "a=x-ss-general.featureFlags:" << feature_flags << std::endl;
 
     // Always request new control stream encryption if the client supports it
     uint32_t encryption_flags_supported = SS_ENC_CONTROL_V2 | SS_ENC_AUDIO;
@@ -947,15 +946,15 @@ namespace rtsp_stream {
     ss << "a=x-ss-general.encryptionSupported:" << encryption_flags_supported << std::endl;
     ss << "a=x-ss-general.encryptionRequested:" << encryption_flags_requested << std::endl;
 
-    if (video::last_encoder_probe_supported_ref_frames_invalidation) {
+    if (video::supports_ref_frames_invalidation) {
       ss << "a=x-nv-video[0].refPicInvalidation:1"sv << std::endl;
     }
 
-    if (video::active_hevc_mode != 1) {
+    if ((video::codec_mode_flags & SCM_HEVC)) {
       ss << "sprop-parameter-sets=AAAAAU"sv << std::endl;
     }
 
-    if (video::active_av1_mode != 1) {
+    if ((video::codec_mode_flags & SCM_AV1_MAIN8)) {
       ss << "a=rtpmap:98 AV1/90000"sv << std::endl;
     }
 
@@ -1142,7 +1141,6 @@ namespace rtsp_stream {
     stream::config_t config;
 
     std::int64_t configuredBitrateKbps;
-    config.audio.flags[audio::config_t::HOST_AUDIO] = session.host_audio;
     try {
       config.audio.channels = (int) util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
       config.audio.mask = (int) util::from_view(args.at("x-nv-audio.surround.channelMask"sv));
@@ -1244,10 +1242,6 @@ namespace rtsp_stream {
       }
       config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
     }
-    if (session.continuous_audio) {
-      BOOST_LOG(info) << "Client requested continuous audio"sv;
-      config.audio.flags[audio::config_t::CONTINUOUS_AUDIO] = true;
-    }
 
     // If the client sent a configured bitrate, we will choose the actual bitrate ourselves
     // by using FEC percentage and audio quality settings. If the calculated bitrate ends up
@@ -1275,14 +1269,14 @@ namespace rtsp_stream {
       config.monitor.bitrate = (int) configuredBitrateKbps;
     }
 
-    if (config.monitor.videoFormat == 1 && video::active_hevc_mode == 1) {
+    if (config.monitor.videoFormat == 1 && !(video::codec_mode_flags & SCM_HEVC)) {
       BOOST_LOG(warning) << "HEVC is disabled, yet the client requested HEVC"sv;
 
       respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return;
     }
 
-    if (config.monitor.videoFormat == 2 && video::active_av1_mode == 1) {
+    if (config.monitor.videoFormat == 2 && !(video::codec_mode_flags & SCM_AV1_MAIN8)) {
       BOOST_LOG(warning) << "AV1 is disabled, yet the client requested AV1"sv;
 
       respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});

@@ -32,8 +32,6 @@
 #include <sys/socket.h>
 
 #if !defined(__FreeBSD__)
-  #include <sys/capability.h>
-  #include <sys/prctl.h>
 #endif
 #ifdef __FreeBSD__
   #include <net/if_dl.h>  // For sockaddr_dl, LLADDR, and AF_LINK
@@ -44,25 +42,16 @@
 // lib includes
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/ip/host_name.hpp>
-#include <boost/process/v1.hpp>
 #include <fcntl.h>
 #include <lizardbyte/common/env.h>
 #include <unistd.h>
 
-#ifdef SUNSHINE_BUILD_DRM
-  #include <dirent.h>
-  #include <xf86drm.h>
-  #include <xf86drmMode.h>
-#endif
-
 // local includes
-#include "graphics.h"
 #include "misc.h"
 #include "src/config.h"
 #include "src/entry_handler.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
-#include "vaapi.h"
 
 #ifdef __GNUC__
   #define SUNSHINE_GNUC_EXTENSION __extension__
@@ -98,9 +87,6 @@
 
 using namespace std::literals;
 namespace fs = std::filesystem;
-namespace bp = boost::process::v1;
-
-window_system_e window_system;  ///< Window system.
 
 namespace dyn {
   /**
@@ -155,80 +141,6 @@ namespace platf {
    * @brief Owning pointer for `getifaddrs` results.
    */
   using ifaddr_t = util::safe_ptr<ifaddrs, freeifaddrs>;
-
-  /**
-   * @brief Open a DRM card node, dropping implicit DRM master when possible.
-   *
-   * See `misc.h` for full documentation. Master check/drop failures are logged
-   * as warnings but do not fail the call.
-   */
-  int open_drm_card_fd(const std::filesystem::path &path, int flags) {
-#ifdef SUNSHINE_BUILD_DRM
-    int fd = open(path.c_str(), flags | O_CLOEXEC);
-    if (fd < 0) {
-      BOOST_LOG(error) << "Couldn't open: "sv << path.string() << ": "sv << strerror(errno);
-      return -1;
-    }
-
-    auto is_master = [&]() -> int {
-      drm_auth_t auth {};
-      auth.magic = 0;
-
-      errno = 0;
-      if (drmIoctl(fd, DRM_IOCTL_AUTH_MAGIC, &auth) == 0) {
-        return 1;  ///< AUTH_MAGIC succeeded, so we are master.
-      }
-
-      auto err = errno;
-      if (err == EACCES) {
-        return 0;  ///< Kernel rejected the ioctl because we are not master.
-      }
-
-      if (err == EINVAL || err == ENOENT) {
-        return 1;  ///< Ioctl reached the master path but the magic (0) was invalid; we are master.
-      }
-
-      BOOST_LOG(warning) << "Couldn't determine DRM master state for "sv << path.string() << ": "sv << strerror(err);
-      return -1;
-    };
-
-    auto master = is_master();
-    if (master < 0) {
-      BOOST_LOG(warning) << "Proceeding without dropping DRM master for "sv << path.string()
-                         << "; compositor VT switches may fail."sv;
-      return fd;
-    }
-
-    if (master) {
-      if (drmDropMaster(fd)) {
-        auto err = errno;
-        BOOST_LOG(warning) << "Couldn't drop DRM master for "sv << path.string() << ": "sv << strerror(err)
-                           << ", Compositor VT switches may fail."sv;
-        return fd;
-      }
-
-      BOOST_LOG(info) << "Dropped DRM master for "sv << path.string();
-
-      master = is_master();
-      if (master < 0) {
-        BOOST_LOG(warning) << "Could not re-verify DRM master state after drop for "sv << path.string() << "."sv;
-        return fd;
-      }
-
-      if (master) {
-        BOOST_LOG(warning) << "Still DRM master after drop for "sv << path.string() << "."sv;
-        return fd;
-      }
-    }
-
-    return fd;
-#else
-  #ifndef __FreeBSD__
-    BOOST_LOG(info) << "Sunshine compiled without DRM support. Cannot control Linux DRM master state for "sv << path.string();
-  #endif
-    return open(path.c_str(), flags | O_CLOEXEC);
-#endif
-  }
 
   /**
    * @brief Read the local interface address list.
@@ -412,47 +324,6 @@ namespace platf {
     return "00:00:00:00:00:00"s;
   }
 
-  bp::child run_command(bool elevated, bool interactive, const std::string &cmd, boost::filesystem::path &working_dir, const bp::environment &env, FILE *file, std::error_code &ec, bp::group *group) {
-    // clang-format off
-    if (!group) {
-      if (!file) {
-        return bp::child(cmd, env, bp::start_dir(working_dir), bp::std_in < bp::null, bp::std_out > bp::null, bp::std_err > bp::null, bp::limit_handles, ec);
-      }
-      else {
-        return bp::child(cmd, env, bp::start_dir(working_dir), bp::std_in < bp::null, bp::std_out > file, bp::std_err > file, bp::limit_handles, ec);
-      }
-    }
-    else {
-      if (!file) {
-        return bp::child(cmd, env, bp::start_dir(working_dir), bp::std_in < bp::null, bp::std_out > bp::null, bp::std_err > bp::null, bp::limit_handles, ec, *group);
-      }
-      else {
-        return bp::child(cmd, env, bp::start_dir(working_dir), bp::std_in < bp::null, bp::std_out > file, bp::std_err > file, bp::limit_handles, ec, *group);
-      }
-    }
-    // clang-format on
-  }
-
-  /**
-   * @brief Open a url in the default web browser.
-   * @param url The url to open.
-   */
-  void open_url(const std::string &url) {
-    // set working dir to user home directory
-    auto working_dir = boost::filesystem::path(lizardbyte::common::get_env("HOME"));
-    std::string cmd = R"(xdg-open ")" + url + R"(")";
-
-    boost::process::v1::environment _env = boost::this_process::environment();
-    std::error_code ec;
-    auto child = run_command(false, false, cmd, working_dir, _env, nullptr, ec, nullptr);
-    if (ec) {
-      BOOST_LOG(warning) << "Couldn't open url ["sv << url << "]: System: "sv << ec.message();
-    } else {
-      BOOST_LOG(info) << "Opened url ["sv << url << "]"sv;
-      child.detach();
-    }
-  }
-
   /**
    * @brief Apply the requested scheduling priority to the current thread.
    */
@@ -528,27 +399,6 @@ namespace platf {
   }
 
   /**
-   * @brief Enable or disable X11 mouse keys for the current session.
-   */
-  void enable_mouse_keys() {
-    // Unimplemented
-  }
-
-  /**
-   * @brief Apply Linux platform state before streaming starts.
-   */
-  void streaming_will_start() {
-    // Nothing to do
-  }
-
-  /**
-   * @brief Restore Linux platform state after streaming stops.
-   */
-  void streaming_will_stop() {
-    // Nothing to do
-  }
-
-  /**
    * @brief Request a Sunshine process restart on exit.
    */
   void restart_on_exit() {
@@ -580,20 +430,6 @@ namespace platf {
     // Gracefully clean up and restart ourselves instead of exiting
     atexit(restart_on_exit);
     lifetime::exit_sunshine(0, true);
-  }
-
-  bool request_process_group_exit(std::uintptr_t native_handle) {
-    if (kill(-((pid_t) native_handle), SIGTERM) == 0 || errno == ESRCH) {
-      BOOST_LOG(debug) << "Successfully sent SIGTERM to process group: "sv << native_handle;
-      return true;
-    } else {
-      BOOST_LOG(warning) << "Unable to send SIGTERM to process group ["sv << native_handle << "]: "sv << errno;
-      return false;
-    }
-  }
-
-  bool process_group_running(std::uintptr_t native_handle) {
-    return waitpid(-((pid_t) native_handle), nullptr, WNOHANG) >= 0;
   }
 
   /**
@@ -1102,294 +938,10 @@ namespace platf {
     }
   }
 
-  namespace source {
-    /**
-     * @brief Enumerates supported source options.
-     */
-    enum source_e : std::size_t {
-#ifdef SUNSHINE_BUILD_CUDA
-      NVFBC,  ///< NvFBC
-#endif
-#ifdef SUNSHINE_BUILD_WAYLAND
-      WAYLAND,  ///< Wayland
-#endif
-#ifdef SUNSHINE_BUILD_DRM
-      KMS,  ///< KMS
-#endif
-#ifdef SUNSHINE_BUILD_X11
-      X11,  ///< X11
-#endif
-#ifdef SUNSHINE_BUILD_KWIN
-      KWIN,  ///< KWin ScreenCast
-#endif
-#ifdef SUNSHINE_BUILD_PORTAL
-      PORTAL,  ///< XDG PORTAL
-#endif
-      MAX_FLAGS  ///< The maximum number of flags
-    };
-  }  // namespace source
-
-  static std::bitset<source::MAX_FLAGS> sources;
-
-#ifdef SUNSHINE_BUILD_CUDA
-  std::vector<std::string> nvfbc_display_names();
-  std::shared_ptr<display_t> nvfbc_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
-
-  bool verify_nvfbc() {
-    return !nvfbc_display_names().empty();
-  }
-#endif
-
-#ifdef SUNSHINE_BUILD_WAYLAND
-  /**
-   * @brief Enumerate displays available through the Wayland capture backend.
-   *
-   * @return Wayland display names, or an empty list when discovery fails.
-   */
-  std::vector<std::string> wl_display_names();
-  /**
-   * @brief Create a Wayland display capture backend.
-   *
-   * @param hwdevice_type Hardware device type requested for capture or encode.
-   * @param display_name Display name.
-   * @param config Configuration values to apply.
-   * @return Display backend, or nullptr when Wayland capture initialization fails.
-   */
-  std::shared_ptr<display_t> wl_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
-
-  /**
-   * @brief Check whether Wayland capture is available for the current session.
-   *
-   * @return True when the active window system is Wayland and at least one output is discoverable.
-   */
-  bool verify_wl() {
-    return window_system == window_system_e::WAYLAND && !wl_display_names().empty();
-  }
-#endif
-
-#ifdef SUNSHINE_BUILD_DRM
-  std::vector<std::string> kms_display_names(mem_type_e hwdevice_type);
-  std::shared_ptr<display_t> kms_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
-
-  bool verify_kms() {
-    return !kms_display_names(mem_type_e::unknown).empty();
-  }
-#endif
-
-#ifdef SUNSHINE_BUILD_X11
-  std::vector<std::string> x11_display_names();
-  std::shared_ptr<display_t> x11_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
-
-  bool verify_x11() {
-    return window_system == window_system_e::X11 && !x11_display_names().empty();
-  }
-#endif
-
-#ifdef SUNSHINE_BUILD_PORTAL
-  std::vector<std::string> portal_display_names();
-  std::shared_ptr<display_t> portal_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
-
-  bool verify_portal() {
-    return !portal_display_names().empty();
-  }
-#endif
-
-#ifdef SUNSHINE_BUILD_KWIN
-  bool kwin_available();
-  std::vector<std::string> kwin_display_names();
-  std::shared_ptr<display_t> kwin_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
-
-  bool verify_kwin() {
-    // Note: The separate kwin_available check is necessary because with CAP_SYS_ADMIN kwin_display_names is never empty during startup
-    return window_system == window_system_e::WAYLAND && kwin_available() && !kwin_display_names().empty();
-  }
-#endif
-
-  /**
-   * @brief List display names accepted by the selected capture backend.
-   */
-  std::vector<std::string> display_names(mem_type_e hwdevice_type) {
-#ifdef SUNSHINE_BUILD_CUDA
-    // display using NvFBC only supports mem_type_e::cuda
-    if (sources[source::NVFBC] && hwdevice_type == mem_type_e::cuda) {
-      return nvfbc_display_names();
-    }
-#endif
-#ifdef SUNSHINE_BUILD_WAYLAND
-    if (sources[source::WAYLAND]) {
-      return wl_display_names();
-    }
-#endif
-#ifdef SUNSHINE_BUILD_DRM
-    if (sources[source::KMS]) {
-      return kms_display_names(hwdevice_type);
-    }
-#endif
-#ifdef SUNSHINE_BUILD_X11
-    if (sources[source::X11]) {
-      return x11_display_names();
-    }
-#endif
-#ifdef SUNSHINE_BUILD_PORTAL
-    if (sources[source::PORTAL]) {
-      return portal_display_names();
-    }
-#endif
-#ifdef SUNSHINE_BUILD_KWIN
-    if (sources[source::KWIN]) {
-      return kwin_display_names();
-    }
-#endif
-    return {};
-  }
-
-  /**
-   * @brief Report whether encoder backends should be probed again before streaming.
-   *
-   * @return Always `true` because Linux GPU changes are not tracked by this backend.
-   */
-  bool needs_encoder_reenumeration() {
-    // Only re-probe if the GPU render device changed (hotplug, driver reload).
-    // Full re-probing on every reconnect leaks ~20 MB due to FFmpeg CBS
-    // allocations during HEVC/AV1 codec validation.
-    static std::string last_render_device;
-    auto current = platf::resolve_render_device();
-    if (current == last_render_device) {
-      return false;
-    }
-    last_render_device = current;
-    return true;
-  }
-
-  std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
-    // Keep KMS as first element to check before dropping CAP_SYS_ADMIN
-#ifdef SUNSHINE_BUILD_DRM
-    if (sources[source::KMS]) {
-      BOOST_LOG(info) << "Screencasting with KMS"sv;
-      return kms_display(hwdevice_type, display_name, config);
-    }
-#endif
-
-    // KMS capture was passed; drop CAP_SYS_ADMIN only.
-    if (has_elevated_privileges(false)) {
-      drop_elevated_privileges(false);
-    }
-
-#ifdef SUNSHINE_BUILD_CUDA
-    if (sources[source::NVFBC] && hwdevice_type == mem_type_e::cuda) {
-      BOOST_LOG(info) << "Screencasting with NvFBC"sv;
-      return nvfbc_display(hwdevice_type, display_name, config);
-    }
-#endif
-#ifdef SUNSHINE_BUILD_WAYLAND
-    if (sources[source::WAYLAND]) {
-      BOOST_LOG(info) << "Screencasting with Wayland's protocol"sv;
-      return wl_display(hwdevice_type, display_name, config);
-    }
-#endif
-#ifdef SUNSHINE_BUILD_X11
-    if (sources[source::X11]) {
-      BOOST_LOG(info) << "Screencasting with X11"sv;
-      return x11_display(hwdevice_type, display_name, config);
-    }
-#endif
-#ifdef SUNSHINE_BUILD_PORTAL
-    if (sources[source::PORTAL]) {
-      BOOST_LOG(info) << "Screencasting with XDG portal"sv;
-      return portal_display(hwdevice_type, display_name, config);
-    }
-#endif
-#ifdef SUNSHINE_BUILD_KWIN
-    if (sources[source::KWIN]) {
-      BOOST_LOG(info) << "Screencasting with KWin ScreenCast"sv;
-      return kwin_display(hwdevice_type, display_name, config);
-    }
-#endif
-
-    return nullptr;
-  }
-
-  /**
-   * @brief Initialize the Linux high-precision timer file descriptor.
-   */
   std::unique_ptr<deinit_t> init() {
-    // enable low latency mode for AMD
-    // https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/30039
-    lizardbyte::common::set_env("AMD_DEBUG", "lowlatencyenc");
-
-    // enable Vulkan video extensions for AMD RADV
-    lizardbyte::common::set_env("RADV_PERFTEST", "video_encode");
-    // Above is deprecated on Mesa 26.1+ and replaced by (keep both to ensure best compatibility):
-    lizardbyte::common::append_env("RADV_EXPERIMENTAL", "video_encode", ",");
-
-    // These are allowed to fail.
-    gbm::init();
-
-    window_system = window_system_e::NONE;
-#ifdef SUNSHINE_BUILD_WAYLAND
-    if (std::string v; lizardbyte::common::get_env("WAYLAND_DISPLAY", v)) {
-      window_system = window_system_e::WAYLAND;
-    }
-#endif
-#if defined(SUNSHINE_BUILD_X11) || defined(SUNSHINE_BUILD_CUDA)
-    if (std::string v; lizardbyte::common::get_env("DISPLAY", v) && window_system != window_system_e::WAYLAND) {
-      if (lizardbyte::common::get_env("WAYLAND_DISPLAY", v)) {
-        BOOST_LOG(warning) << "Wayland detected, yet sunshine will use X11 for screencasting, screencasting will only work on XWayland applications"sv;
-      }
-
-      window_system = window_system_e::X11;
-    }
-#endif
-
-#ifdef SUNSHINE_BUILD_CUDA
-    if (((config::video.capture.empty() && sources.none()) || config::video.capture == "nvfbc") && verify_nvfbc()) {
-      sources[source::NVFBC] = true;
-    }
-#endif
-#ifdef SUNSHINE_BUILD_WAYLAND
-    if (((config::video.capture.empty() && sources.none()) || config::video.capture == "wlr") && verify_wl()) {
-      sources[source::WAYLAND] = true;
-    }
-#endif
-#ifdef SUNSHINE_BUILD_DRM
-    if (((config::video.capture.empty() && sources.none()) || config::video.capture == "kms") && verify_kms()) {
-      sources[source::KMS] = true;
-    }
-#endif
-#ifdef SUNSHINE_BUILD_X11
-    // We enumerate this capture backend regardless of other suitable sources,
-    // since it may be needed as a NvFBC fallback for software encoding on X11.
-    if ((config::video.capture.empty() || config::video.capture == "x11") && verify_x11()) {
-      sources[source::X11] = true;
-    }
-#endif
-#ifdef SUNSHINE_BUILD_PORTAL
-    if ((config::video.capture.empty() || config::video.capture == "portal") && verify_portal()) {
-      sources[source::PORTAL] = true;
-    }
-#endif
-#ifdef SUNSHINE_BUILD_KWIN
-    if (((config::video.capture.empty() && sources.none()) || config::video.capture == "kwin") && verify_kwin()) {
-      sources[source::KWIN] = true;
-    }
-#endif
-
-    if (sources.none()) {
-      BOOST_LOG(error) << "Unable to initialize capture method"sv;
-      return nullptr;
-    }
-
-    if (!gladLoaderLoadEGL(NULL)) {
-      BOOST_LOG(error) << "Failed to load EGL library symbols"sv;
-      return nullptr;
-    }
-
     return std::make_unique<deinit_t>();
   }
 
-  /**
-   * @brief Linux high-precision timer implementation backed by `timerfd`.
-   */
   class linux_high_precision_timer: public high_precision_timer {
   public:
     void sleep_for(const std::chrono::nanoseconds &duration) override {
@@ -1405,131 +957,4 @@ namespace platf {
     return std::make_unique<linux_high_precision_timer>();
   }
 
-  /**
-   * @brief Find the DRM render node associated with the active display.
-   *
-   * @return Render-node path, or an empty string when no matching node is found.
-   */
-  std::string find_render_node_with_display() {
-#ifdef SUNSHINE_BUILD_DRM
-    auto *dir = opendir("/dev/dri");
-    if (!dir) {
-      return {};
-    }
-
-    std::string result;
-    while (auto *entry = readdir(dir)) {
-      if (strncmp(entry->d_name, "card", 4) != 0 || !isdigit(entry->d_name[4])) {
-        continue;
-      }
-
-      std::string path = std::string("/dev/dri/") + entry->d_name;
-      int fd = open(path.c_str(), O_RDWR);
-      if (fd < 0) {
-        continue;
-      }
-
-      auto *res = drmModeGetResources(fd);
-      if (res) {
-        for (int i = 0; i < res->count_connectors && result.empty(); i++) {
-          auto *conn = drmModeGetConnector(fd, res->connectors[i]);
-          if (conn) {
-            if (conn->connection == DRM_MODE_CONNECTED) {
-              char *render = drmGetRenderDeviceNameFromFd(fd);
-              if (render) {
-                result = render;
-                free(render);
-              }
-            }
-            drmModeFreeConnector(conn);
-          }
-        }
-        drmModeFreeResources(res);
-      }
-      close(fd);
-      if (!result.empty()) {
-        break;
-      }
-    }
-    closedir(dir);
-    return result;
-#else
-    return {};
-#endif
-  }
-
-  std::string resolve_render_device() {
-    if (!config::video.adapter_name.empty()) {
-      return config::video.adapter_name;
-    }
-    auto detected = find_render_node_with_display();
-    return detected.empty() ? "/dev/dri/renderD128" : detected;
-  }
-
-#if !defined(__FreeBSD__)
-  static constexpr cap_value_t FULL_CAPS[] = {CAP_SYS_ADMIN, CAP_SYS_NICE};
-  static constexpr cap_value_t ADMIN_CAPS[] = {CAP_SYS_ADMIN};
-
-  constexpr std::span<const cap_value_t> ELEVATED_PRIVILEGES_FULL {FULL_CAPS};  ///< Protocol or platform constant for elevated privileges full.
-  constexpr std::span<const cap_value_t> ELEVATED_PRIVILEGES_ADMIN {ADMIN_CAPS};  ///< Protocol or platform constant for elevated privileges admin.
-#endif
-
-  bool has_elevated_privileges(bool all_caps) {
-#if !defined(__FreeBSD__)
-    const auto caps_to_check = all_caps ? ELEVATED_PRIVILEGES_FULL : ELEVATED_PRIVILEGES_ADMIN;
-    const cap_t caps = cap_get_proc();
-    if (!caps) {
-      BOOST_LOG(error) << "[misc] has_elevated_privileges failed to get process capabilities."sv;
-      return false;
-    }
-    for (const auto c : caps_to_check) {
-      cap_flag_value_t cap_flags_value;
-      cap_get_flag(caps, c, CAP_EFFECTIVE, &cap_flags_value);
-      if (cap_flags_value == CAP_SET) {
-        BOOST_LOG(debug) << "[misc] has_elevated_privileges found effective cap:"sv << c;
-        return true;
-      }
-    }
-    for (const auto c : caps_to_check) {
-      cap_flag_value_t cap_flags_value;
-      cap_get_flag(caps, c, CAP_PERMITTED, &cap_flags_value);
-      if (cap_flags_value == CAP_SET) {
-        BOOST_LOG(debug) << "[misc] has_elevated_privileges found permitted cap:"sv << c;
-        return true;
-      }
-    }
-    cap_free(caps);
-#endif
-    return false;
-  }
-
-  void drop_elevated_privileges(bool all_caps) {
-#if !defined(__FreeBSD__)
-    bool failed = false;
-    const auto caps_to_drop = all_caps ? ELEVATED_PRIVILEGES_FULL : ELEVATED_PRIVILEGES_ADMIN;
-    const cap_t caps = cap_get_proc();
-    if (!caps) {
-      BOOST_LOG(error) << "[misc] drop_elevated_privileges failed to get process capabilities"sv;
-      return;
-    }
-
-    cap_set_flag(caps, CAP_EFFECTIVE, caps_to_drop.size(), caps_to_drop.data(), CAP_CLEAR);
-    cap_set_flag(caps, CAP_PERMITTED, caps_to_drop.size(), caps_to_drop.data(), CAP_CLEAR);
-
-    if (cap_set_proc(caps) != 0) {
-      BOOST_LOG(error) << "[misc] drop_elevated_privileges failed to prune capabilities: "sv << std::strerror(errno);
-      failed = true;
-    }
-    cap_free(caps);
-
-    // Reset dumpable AFTER the caps have been pruned to ensure /proc/pid/root is accessible.
-    if (prctl(PR_SET_DUMPABLE, 1) != 0) {
-      BOOST_LOG(error) << "[misc] drop_elevated_privileges failed to set PR_SET_DUMPABLE: "sv << std::strerror(errno);
-      failed = true;
-    }
-    if (!failed) {
-      BOOST_LOG(info) << "[misc] drop_elevated_privileges succeeded in dropping capabilities"sv;
-    }
-#endif
-  }
 }  // namespace platf

@@ -7,23 +7,12 @@ set(BOOST_VERSION "1.89.0")
 set(BOOST_COMPONENTS
         filesystem
         log
-        program_options
         system
 )
 # system is not used by Sunshine, but by Simple-Web-Server, added here for convenience
 
 if(NOT WIN32)
     list(APPEND BOOST_COMPONENTS locale)
-endif()
-
-# algorithm, preprocessor, scope, and uuid are not used by Sunshine, but by libdisplaydevice, added here for convenience
-if(WIN32)
-    list(APPEND BOOST_COMPONENTS
-            algorithm
-            preprocessor
-            scope
-            uuid
-    )
 endif()
 
 if(BOOST_USE_STATIC)
@@ -50,7 +39,6 @@ if(NOT Boost_FOUND)
             asio
             crc
             format
-            process
             property_tree)
 
     set(BOOST_ENABLE_CMAKE ON)

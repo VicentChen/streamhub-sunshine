@@ -1,207 +1,49 @@
 /**
  * @file src/input.h
- * @brief Declarations for gamepad, keyboard, and mouse input handling.
+ * @brief Moonlight controller message decoding, independent of local input devices.
  */
 #pragma once
-
-// standard includes
-#include <cstddef>
-#include <cstdint>
-#include <functional>
-#include <memory>
-#include <span>
-#include <string_view>
-#include <vector>
-
-// local includes
 #include "platform/common.h"
-#include "thread_safe.h"
+
+#include <atomic>
+#include <optional>
+#include <span>
+#include <variant>
 
 namespace input {
-  struct input_t;
-
   /**
-   * @brief Write a debug log representation of the input packet.
+   * @brief Whether the connected input source accepts controller touch and motion events.
    *
-   * @param input Raw input packet to format for logging.
+   * The protocol adapter sets this from the source capabilities and clears it on
+   * disconnect. It defaults to false while no source is connected. Moonlight gates
+   * both controller touch and motion messages on LI_FF_CONTROLLER_TOUCH_EVENTS.
    */
-  void print(void *input);
-  /**
-   * @brief Reset stream input state after a client disconnect or shutdown.
-   *
-   * @param input Shared stream input state to reset.
-   */
-  void reset(std::shared_ptr<input_t> &input);
+  inline std::atomic_bool supports_controller_touch_events {false};
 
-  /**
-   * @brief Destroy every retained virtual gamepad session.
-   *
-   * Retained gamepads survive a paused transport connection so they can be reused on resume. Call this when the
-   * streamed application or all streaming sessions are explicitly terminated.
-   */
-  void terminate_gamepads();
-
-  /**
-   * @brief Destroy virtual gamepads retained for one paired client.
-   *
-   * @param session_id Stable paired-client identity used by alloc().
-   */
-  void terminate_gamepads(std::string_view session_id);
-
-  /**
-   * @brief Queue a raw input message for platform passthrough.
-   */
-  void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&input_data);
-
-  /**
-   * @brief Initialize global input resources and platform backends.
-   *
-   * @return Cleanup handle for initialized input resources, or null if none are required.
-   */
-  [[nodiscard]] std::unique_ptr<platf::deinit_t> init();
-
-  /**
-   * @brief Probe whether the platform can create virtual gamepads.
-   *
-   * @return True when at least one configured gamepad backend is available.
-   */
-  bool probe_gamepads();
-
-  /**
-   * @brief Recreate shared libvirtualhid keyboard and mouse devices after a license-state change.
-   *
-   * The work is serialized with streamed input so both backends can switch
-   * safely between the Windows HID and SendInput paths.
-   */
-  void refresh_virtual_input();
-
-  /**
-   * @brief Allocate and initialize platform input state for a stream.
-   *
-   * @param mail Mailbox used to exchange messages with worker threads.
-   * @param session_id Stable paired-client identity shared by launch and resume connections.
-   * @return Shared input state bound to the stream mailbox.
-   */
-  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id);
-
-#ifdef SUNSHINE_TESTS
-  namespace testing {
-    /**
-     * @brief Replace the global platform input backend for a unit test.
-     *
-     * @param input Test-owned platform input backend.
-     */
-    void set_platform_input(platf::input_t input);
-
-    /**
-     * @brief Allocate a gamepad directly in retained input state for a unit test.
-     *
-     * @param input Retained input state.
-     * @param client_index Client-relative controller index.
-     * @param metadata Client-reported controller metadata.
-     * @return Assigned global gamepad slot, or -1 on failure.
-     */
-    int alloc_gamepad(std::shared_ptr<input_t> &input, std::uint8_t client_index, const platf::gamepad_arrival_t &metadata);
-
-    /**
-     * @brief Return the global gamepad slot stored for a test controller.
-     *
-     * @param input Retained input state.
-     * @param client_index Client-relative controller index.
-     * @return Assigned global gamepad slot, or -1 when unallocated.
-     */
-    int gamepad_id(const std::shared_ptr<input_t> &input, std::uint8_t client_index);
-
-    /**
-     * @brief Keyboard event Sunshine emitted toward the platform backend.
-     */
-    struct keyboard_event_t {
-      std::uint16_t key_code;  ///< Platform keycode after the configured keybinding remap.
-      bool release;  ///< Whether the event releases the key.
-      std::uint8_t flags;  ///< Bit flags carried by the client keyboard packet.
-    };
-
-    /**
-     * @brief Redirect keyboard output away from the host operating system.
-     *
-     * Tests must install a sink before emitting keys, otherwise the events are typed into the
-     * machine running the test suite.
-     *
-     * @param sink Recorder invoked in place of platf::keyboard_update, or empty to restore
-     *             delivery to the platform backend.
-     */
-    void set_keyboard_sink(std::function<void(const keyboard_event_t &)> sink);
-
-    /**
-     * @brief Process one client keyboard packet on the calling thread.
-     *
-     * @param input Retained input state.
-     * @param key_code Windows virtual-key code sent by the client.
-     * @param modifiers Client modifier bitmask carried by the packet.
-     * @param flags Bit flags carried by the client keyboard packet.
-     * @param release Whether the packet releases the key.
-     */
-    void send_keyboard_packet(std::shared_ptr<input_t> &input, std::uint16_t key_code, std::uint8_t modifiers, std::uint8_t flags, bool release);
-
-    /**
-     * @brief Forget every key Sunshine tracks as pressed and cancel any pending key repeat.
-     */
-    void reset_keyboard_state();
-
-    /**
-     * @brief Release every key Sunshine tracks as pressed, as a disconnect does.
-     */
-    void release_held_keys();
-
-    /**
-     * @brief Validate raw protocol input bytes for a unit test.
-     *
-     * @param packet Raw packet bytes.
-     * @return True when the packet is safe for typed processing.
-     */
-    bool is_valid_input_packet(std::span<const std::uint8_t> packet);
-
-    /**
-     * @brief Return the number of validated packets waiting in a test input queue.
-     *
-     * @param input Shared stream input state.
-     * @return Number of queued packets, or zero for an empty input pointer.
-     */
-    std::size_t queued_input_packet_count(const std::shared_ptr<input_t> &input);
-  }  // namespace testing
-#endif
-
-  /**
-   * @brief Touchscreen coordinate bounds used to scale absolute input.
-   */
-  struct touch_port_t: public platf::touch_port_t {
-    int env_width;  ///< Width of the full capture environment in physical pixels.
-    int env_height;  ///< Height of the full capture environment in physical pixels.
-
-    // Offset x and y coordinates of the client
-    float client_offsetX;  ///< Horizontal client viewport offset used when scaling touch input.
-    float client_offsetY;  ///< Vertical client viewport offset used when scaling touch input.
-
-    float scalar_inv;  ///< Inverse scale factor from client coordinates to display coordinates.
-    float scalar_tpcoords;  ///< Scale factor from client coordinates to touch-port coordinates.
-
-    int env_logical_width;  ///< Width of the full capture environment after display scaling.
-    int env_logical_height;  ///< Height of the full capture environment after display scaling.
-
-    /**
-     * @brief Check whether the touch-port bounds are initialized.
-     */
-    explicit operator bool() const {
-      return width != 0 && height != 0 && env_width != 0 && env_height != 0;
-    }
+  /** @brief Controller state, including the client active-controller mask. */
+  struct gamepad_state_t {
+    std::uint16_t active_mask;
+    platf::gamepad_state_t state;
   };
 
-  /**
-   * @brief Scale the ellipse axes according to the provided size.
-   * @param val The major and minor axis pair.
-   * @param rotation The rotation value from the touch/pen event.
-   * @param scalar The scalar cartesian coordinate pair.
-   * @return The major and minor axis pair.
-   */
-  std::pair<float, float> scale_client_contact_area(const std::pair<float, float> &val, uint16_t rotation, const std::pair<float, float> &scalar);
+  /** @brief Decoded controller event with a client-relative index. */
+  struct gamepad_event_t {
+    std::uint8_t controller;
+    std::variant<gamepad_state_t, platf::gamepad_arrival_t, platf::gamepad_touch_t, platf::gamepad_motion_t, platf::gamepad_battery_t> data;
+  };
+
+  /** @brief Decode one controller packet; malformed or other input types return nullopt. */
+  std::optional<gamepad_event_t> decode(std::span<const std::uint8_t> bytes);
+
+  /** @brief Controller messages belonging to one transport session. */
+  struct input_t {
+    safe::mail_raw_t::queue_t<gamepad_event_t> events;
+  };
+
+  /** @brief Allocate session-local protocol state without opening host devices. */
+  std::shared_ptr<input_t> alloc(safe::mail_t mail);
+  /** @brief Decode and enqueue a controller packet. */
+  void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&bytes);
+  /** @brief Stop delivery for the disconnected session. */
+  void reset(std::shared_ptr<input_t> &input);
 }  // namespace input
