@@ -17,6 +17,7 @@ build = args.build.resolve()
 suites = ["StreamHub*Test.*"]
 if args.regression:
     suites += ["ConcatAndInsertTests.*", "ControlPacketTests.*", "EntryHandlerTests.*",
+               "PairingSessionRegistryTest.*", "PairingHttpHandlerTest.*", "*PairingTest*",
                "ClientAuthorizationTest.*", "CryptoTest.*", "BindAddressTest.*",
                "*MdnsInstanceNameTest*", "*UrlEscapeTest*", "*UrlGetHostTest*",
                "ConfigConsistencyTest.*", "LocaleConsistencyTest.*",

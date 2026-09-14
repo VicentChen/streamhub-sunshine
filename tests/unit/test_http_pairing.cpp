@@ -482,6 +482,13 @@ namespace {
       return client_->request("GET", std::string {target})->content.string();
     }
 
+    /** @brief Send an initial request and abandon it after a bounded client timeout. */
+    void abandon_request(const std::string &target) {
+      SimpleWeb::Client<SimpleWeb::HTTP> abandoned {std::format("localhost:{}", port_.load())};
+      abandoned.config.timeout = 1;
+      abandoned.request("GET", target);
+    }
+
     /**
      * @brief Wait for a request to enter the pending pairing registry.
      *
@@ -738,4 +745,115 @@ TEST_F(PairingSessionRegistryTest, ConcurrentInsertionAndCancellationLeaveConsis
 
   EXPECT_EQ(successful_cancellations, session_count);
   EXPECT_TRUE(get_pending_pairings().empty());
+}
+
+/** @brief Retrying resets handshake state and revokes the previous PIN approval. */
+TEST_F(PairingSessionRegistryTest, SamePeerRetryReplacesHandshakeAndApproval) {
+  for (const auto phase : {PAIR_PHASE::NONE, PAIR_PHASE::GETSERVERCERT, PAIR_PHASE::CLIENTCHALLENGE, PAIR_PHASE::SERVERCHALLENGERESP}) {
+    expire_pair_sessions(std::chrono::steady_clock::time_point::max());
+    auto old = pending_session("retry", "Old", "192.0.2.10");
+    old.client.cert = PUBLIC_CERT;
+    old.last_phase = phase;
+    old.serversecret = "old-secret";
+    std::string old_id;
+    ASSERT_EQ(insert_pair_session(std::move(old), old_id), pair_session_insert_e::ADDED);
+    auto fresh = pending_session("retry", "New", "192.0.2.10");
+    fresh.client.cert = PUBLIC_CERT;
+    fresh.async_insert_pin.salt = "00112233445566778899aabbccddeeff";
+    std::string new_id;
+    ASSERT_EQ(insert_pair_session(std::move(fresh), new_id), pair_session_insert_e::ADDED);
+    EXPECT_NE(old_id, new_id);
+    EXPECT_FALSE(cancel_pairing(old_id));
+    EXPECT_FALSE(pin(old_id, "1234", "Old"));
+    const auto pending = get_pending_pairings();
+    ASSERT_EQ(pending.size(), 1);
+    EXPECT_EQ(pending.front().id, new_id);
+    EXPECT_EQ(pending.front().name, "New");
+  }
+}
+
+/** @brief A claimed unique ID cannot replace a request from another peer. */
+TEST_F(PairingSessionRegistryTest, RetryRequiresMatchingNonemptyCertificateAndAddress) {
+  auto old = pending_session("retry", "Old", "192.0.2.10");
+  old.client.cert = PUBLIC_CERT;
+  std::string old_id;
+  ASSERT_EQ(insert_pair_session(std::move(old), old_id), pair_session_insert_e::ADDED);
+  for (int mismatch = 0; mismatch < 4; ++mismatch) {
+    auto fresh = pending_session("retry", "New", "192.0.2.10");
+    fresh.client.cert = PUBLIC_CERT;
+    if (mismatch == 0) {
+      fresh.client.cert = "different-certificate";
+    }
+    if (mismatch == 1) {
+      fresh.client.cert.clear();
+    }
+    if (mismatch == 2) {
+      fresh.async_insert_pin.address = "192.0.2.20";
+    }
+    if (mismatch == 3) {
+      fresh.async_insert_pin.address.clear();
+    }
+    std::string rejected;
+    EXPECT_EQ(insert_pair_session(std::move(fresh), rejected), pair_session_insert_e::ALREADY_EXISTS);
+    EXPECT_TRUE(rejected.empty());
+    ASSERT_EQ(get_pending_pairings().size(), 1);
+    EXPECT_EQ(get_pending_pairings().front().id, old_id);
+  }
+}
+
+/** @brief A real parked HTTP request completes when the same client retries. */
+TEST_F(PairingHttpHandlerTest, RetryCompletesOldRequestAndAwaitsFreshApproval) {
+  auto first = std::async(std::launch::async, [this]() {
+    return request(server_certificate_target("retry-http"));
+  });
+  const auto old_id = wait_for_pending_pairing();
+  ASSERT_FALSE(old_id.empty());
+  auto second = std::async(std::launch::async, [this]() {
+    return request(server_certificate_target("retry-http", "00112233445566778899aabbccddeeff"));
+  });
+  std::string new_id;
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    const auto pending = get_pending_pairings();
+    if (pending.size() == 1 && pending.front().id != old_id) {
+      new_id = pending.front().id;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds {10});
+  }
+  EXPECT_FALSE(new_id.empty());
+  EXPECT_FALSE(cancel_pairing(old_id));
+  if (!new_id.empty()) {
+    EXPECT_TRUE(cancel_pairing(new_id));
+  } else {
+    expire_pair_sessions(std::chrono::steady_clock::time_point::max());
+  }
+  EXPECT_NE(first.get().find("superseded by a new attempt"), std::string::npos);
+  EXPECT_NE(second.get().find("cancelled by operator"), std::string::npos);
+}
+
+/** @brief A disconnected client can immediately restart its pending handshake. */
+TEST_F(PairingHttpHandlerTest, TimedOutClientCanRetryImmediately) {
+  EXPECT_THROW(abandon_request(server_certificate_target("timeout-retry")), std::exception);
+  const auto old_id = wait_for_pending_pairing();
+  ASSERT_FALSE(old_id.empty());
+  auto retried = std::async(std::launch::async, [this]() {
+    return request(server_certificate_target("timeout-retry"));
+  });
+  std::string new_id;
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    const auto pending = get_pending_pairings();
+    if (pending.size() == 1 && pending.front().id != old_id) {
+      new_id = pending.front().id;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds {10});
+  }
+  EXPECT_FALSE(new_id.empty());
+  EXPECT_FALSE(cancel_pairing(old_id));
+  if (!new_id.empty()) {
+    EXPECT_TRUE(cancel_pairing(new_id));
+  } else {
+    expire_pair_sessions(std::chrono::steady_clock::time_point::max());
+  }
+  EXPECT_NE(retried.get().find("cancelled by operator"), std::string::npos);
 }

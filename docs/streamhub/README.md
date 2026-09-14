@@ -7,6 +7,7 @@
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
 | [protocol 接入计划](protocol-integration-plan.md) | Receiver 分步实现、每步交付物与短时验证 | 接线与客户端验证已完成，现场 HDMI 待验 |
+| [配对重试](pairing-retry.md) | 失败后同客户端重试与旧审批失效 | 143 项回归通过，已部署 |
 | [Receiver 接入](receiver-integration.md) | 使用、所有权、兼容组合和有限集成入口 | 已完成客户端验证；现场 HDMI 待验 |
 | [控制传输](control-transport.md) | protocol 构建依赖、socket 配置、IPC API 与隔离测试入口 | 已通过板端验证 |
 | [瘦身计划](slimming-plan.md) | 保留功能、删除对象、依赖清理和回归验证 | 已确定项完成 |

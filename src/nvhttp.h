@@ -164,7 +164,7 @@ namespace nvhttp {
    */
   enum class pair_session_insert_e {
     ADDED,  ///< The session was inserted successfully.
-    ALREADY_EXISTS,  ///< A session with the same client unique ID is already active.
+    ALREADY_EXISTS,  ///< The unique ID belongs to a different or unidentified peer.
     FULL  ///< The bounded session store has reached its limit.
   };
 
@@ -193,7 +193,8 @@ namespace nvhttp {
   bool is_valid_pairing_name(std::string_view name);
 
   /**
-   * @brief Insert a newly created pairing session into bounded pending storage.
+   * @brief Insert a new pairing attempt, replacing unfinished state from the same certificate and address.
+   * @details Replacement invalidates the previous approval ID and all handshake secrets; other peers are rejected.
    *
    * @param sess Pairing session to insert.
    * @param pairing_id Receives the unguessable approval identifier on success.

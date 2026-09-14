@@ -578,8 +578,21 @@ namespace nvhttp {
     expire_pair_sessions_unlocked(now);
     pairing_id.clear();
 
-    if (map_id_sess.contains(sess.client.uniqueID)) {
-      return pair_session_insert_e::ALREADY_EXISTS;
+    std::string replaced_pairing_id;
+    if (const auto existing = map_id_sess.find(sess.client.uniqueID); existing != map_id_sess.end()) {
+      // A fresh attempt from the same endpoint and certificate replaces abandoned
+      // handshake state. The unique ID alone is not sufficient to replace a peer.
+      const auto &previous = existing->second;
+      if (sess.client.cert.empty() || sess.async_insert_pin.address.empty() || previous.client.cert != sess.client.cert || previous.async_insert_pin.address != sess.async_insert_pin.address) {
+        return pair_session_insert_e::ALREADY_EXISTS;
+      }
+      pt::ptree tree;
+      tree.put("root.paired", 0);
+      tree.put("root.<xmlattr>.status_code", 409);
+      tree.put("root.<xmlattr>.status_message", "Pairing request superseded by a new attempt");
+      replaced_pairing_id = previous.async_insert_pin.id;
+      write_pairing_response(existing->second, tree);
+      map_id_sess.erase(existing);
     }
     if (map_id_sess.size() >= MAX_PENDING_PAIRING_SESSIONS) {
       return pair_session_insert_e::FULL;
@@ -587,9 +600,9 @@ namespace nvhttp {
 
     do {
       pairing_id = crypto::rand_alphabet(PAIRING_ID_SIZE, "0123456789abcdef"sv);
-    } while (std::ranges::any_of(map_id_sess, [&](const auto &entry) {
-      return entry.second.async_insert_pin.id == pairing_id;
-    }));
+    } while (pairing_id == replaced_pairing_id || std::ranges::any_of(map_id_sess, [&](const auto &entry) {
+               return entry.second.async_insert_pin.id == pairing_id;
+             }));
 
     sess.async_insert_pin.id = pairing_id;
     sess.async_insert_pin.expires_at = now + PAIRING_SESSION_TIMEOUT;
