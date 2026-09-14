@@ -75,7 +75,16 @@ namespace audio {
    * @brief Byte buffer used for encoded audio packet payloads.
    */
   using buffer_t = util::buffer_t<std::uint8_t>;
-  inline constexpr size_t max_packet_bytes = 8192;  ///< Bounds high-quality 7.1 Opus at 20 ms, including codec overhead.
+  inline constexpr size_t max_datagram_bytes = 1400;  ///< Moonlight AudioStream.c receive buffer, including RTP/FEC headers.
+  inline constexpr size_t max_packet_bytes = 1360;  ///< Leaves 24 bytes for RTP/FEC and up to 16 bytes for CBC padding.
+  inline constexpr size_t max_encrypted_packet_bytes = (max_packet_bytes / 16 + 1) * 16;  ///< PKCS#7 adds a full block for aligned plaintext.
+
+  /**
+   * @brief Reject audio configurations that cannot fit Moonlight's receive buffer.
+   * @param config Negotiated channel count, quality and packet duration.
+   * @throws std::invalid_argument For unsupported formats or oversized CBR packets.
+   */
+  void validate_config(const config_t &config);
 
   /**
    * @brief Encoded audio packet paired with platform channel metadata.

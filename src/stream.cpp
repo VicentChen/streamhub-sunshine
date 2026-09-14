@@ -515,6 +515,7 @@ namespace stream {
       std::string ping_payload;  ///< Payload expected from video-channel ping packets.
 
       int lowseq;  ///< Next base sequence number for video RTP packets.
+      video::rtp_clock clock;  ///< Source PTS origin retained independently for each session.
       udp::endpoint peer;  ///< Client UDP endpoint for the video channel.
 
       std::optional<crypto::cipher::gcm_t> cipher;  ///< Optional AES-GCM cipher for encrypted video packets.
@@ -1515,7 +1516,6 @@ namespace stream {
   void videoBroadcastThread(udp::socket &sock) {
     auto shutdown_event = mail::man->event<bool>(mail::broadcast_shutdown);
     auto packets = mail::man->queue<video::packet_t>(mail::video_packets);
-    auto video_epoch = std::chrono::steady_clock::now();
 
     // Video traffic is sent on this thread
     platf::set_thread_name("stream::videoBroadcast");
@@ -1699,15 +1699,14 @@ namespace stream {
 
           size_t next_shard_to_send = 0;
 
-          // RTP video timestamps use a 90 KHz clock and the frame_timestamp from when the frame was captured
-          // When a timestamp isn't available (duplicate frames), the timestamp from rate control is used instead.
+          // Provider PTS drives a per-session clock. Capture time is only a legacy
+          // fallback; the first queued frame may predate this sender thread.
           bool frame_is_dupe = false;
           if (!packet->presentation_time && !packet->frame_timestamp) {
             packet->frame_timestamp = ratecontrol_next_frame_start;
             frame_is_dupe = true;
           }
-          using rtp_tick = std::chrono::duration<uint32_t, std::ratio<1, 90000>>;
-          uint32_t timestamp = std::chrono::round<rtp_tick>(packet->presentation_time.value_or(packet->frame_timestamp.value_or(ratecontrol_next_frame_start)) - video_epoch).count();
+          uint32_t timestamp = session->video.clock.timestamp(packet->presentation_time.value_or(packet->frame_timestamp.value_or(ratecontrol_next_frame_start)));
 
           // set FEC info now that we know for sure what our percentage will be for this frame
           for (auto x = 0; x < shards.size(); ++x) {
@@ -2389,6 +2388,7 @@ namespace stream {
         }
         const auto &v = session.config.monitor;
         const auto &a = session.config.audio;
+        audio::validate_config(a);
         streamhub::requirements request {v.width, v.height, v.framerate, v.framerateX100, v.bitrate, v.videoFormat, v.encoderCscMode, v.dynamicRange, v.chromaSamplingType, v.enableIntraRefresh, v.numRefFrames, v.slicesPerFrame, a.channels, a.mask, a.packetDuration};
         session.provider = std::make_unique<streamhub::receiver>(config::streamhub_socket, streamhub::negotiate(launch.input_id, request), launch.cancel.get_token());
         BOOST_LOG(info) << "StreamHub CONNECTED input=" << launch.input_id << " session=" << session.provider->id();
@@ -2573,7 +2573,9 @@ namespace stream {
         session->video.gcm_iv_counter = 0;
       }
 
-      constexpr auto max_block_size = crypto::cipher::round_to_pkcs7_padded(audio::max_packet_bytes);
+      constexpr auto max_block_size = audio::max_encrypted_packet_bytes;
+      static_assert(sizeof(audio_packet_t) + max_block_size <= audio::max_datagram_bytes);
+      static_assert(sizeof(audio_fec_packet_t) + max_block_size <= audio::max_datagram_bytes);
 
       util::buffer_t<char> shards {RTPA_TOTAL_SHARDS * max_block_size};
       util::buffer_t<uint8_t *> shards_p {RTPA_TOTAL_SHARDS};

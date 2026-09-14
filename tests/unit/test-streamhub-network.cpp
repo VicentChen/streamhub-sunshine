@@ -5,6 +5,7 @@
 #ifdef __linux__
   #include "../tests_common.h"
   #include "src/streamhub/transport.h"
+  #include "src/video.h"
 
   #include <array>
   #include <cerrno>
@@ -31,5 +32,27 @@ TEST(StreamHubNetworkTest, SaturatedSocketReturnsAtDeadlineAndRecovers) {
   EXPECT_LT(std::chrono::steady_clock::now() - begin, std::chrono::milliseconds(500));
   while (recv(reader.get(), data.data(), data.size(), MSG_DONTWAIT) > 0) {}
   EXPECT_TRUE(platf::wait_socket_writable(writer.get(), std::chrono::steady_clock::now() + std::chrono::milliseconds(50)));
+}
+
+TEST(StreamHubNetworkTest, VideoClockAnchorsQueuedFramesAndPreservesGaps) {
+  using namespace std::chrono_literals;
+  // The Provider has already published these frames before the sender exists.
+  const auto first = std::chrono::steady_clock::now() - 1s;
+  video::rtp_clock clock;
+  EXPECT_EQ(clock.timestamp(first), 1u);
+  EXPECT_EQ(clock.timestamp(first + 16683333ns), 1502u);
+  EXPECT_EQ(clock.timestamp(first + 50ms), 4501u);
+  EXPECT_EQ(clock.timestamp(first + 2s), 180001u);
+}
+
+TEST(StreamHubNetworkTest, VideoClockOriginsAreIndependentAcrossSessions) {
+  using namespace std::chrono_literals;
+  const auto first = std::chrono::steady_clock::now() - 1s;
+  video::rtp_clock original, resumed;
+  EXPECT_EQ(original.timestamp(first), 1u);
+  EXPECT_EQ(original.timestamp(first + 10s), 900001u);
+  EXPECT_EQ(resumed.timestamp(first + 10s), 1u);
+  EXPECT_EQ(original.timestamp(first + 11s), 990001u);
+  EXPECT_EQ(resumed.timestamp(first + 11s), 90001u);
 }
 #endif

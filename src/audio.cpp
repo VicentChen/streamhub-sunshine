@@ -121,8 +121,20 @@ namespace audio {
     int frames;  ///< Per-channel frames per block.
   };
 
+  void validate_config(const config_t &config) {
+    if ((config.channels != 2 && config.channels != 6 && config.channels != 8) || (config.packetDuration != 5 && config.packetDuration != 10 && config.packetDuration != 20)) {
+      throw std::invalid_argument("unsupported Opus channels or packet duration");
+    }
+    const auto &stream = stream_configs[map_stream(config.channels, config.flags[config_t::HIGH_QUALITY])];
+    const auto packet_bytes = (uint64_t(stream.bitrate) * config.packetDuration + 7999) / 8000;
+    if (packet_bytes > max_packet_bytes) {
+      throw std::invalid_argument("Opus quality and packet duration exceed Moonlight's 1400-byte audio datagram limit");
+    }
+  }
+
   pcm_encoder::pcm_encoder(config_t config):
       state_(std::make_unique<state>()) {
+    validate_config(config);
     auto stream = stream_configs[map_stream(config.channels, config.flags[config_t::HIGH_QUALITY])];
     if (config.flags[config_t::CUSTOM_SURROUND_PARAMS]) {
       apply_surround_params(stream, config.customStreamParams);

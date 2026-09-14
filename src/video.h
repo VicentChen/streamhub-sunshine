@@ -14,6 +14,28 @@
 #include <vector>
 
 namespace video {
+  /** @brief Session-local mapping from source PTS to the 90 kHz RTP clock. */
+  class rtp_clock {
+  public:
+    /**
+     * @brief Anchor the first frame at tick one and preserve source time intervals.
+     * @param pts Source presentation time; independent of sender startup and wall time.
+     * @return RTP timestamp, wrapping only after a full 32-bit clock period.
+     */
+    uint32_t timestamp(std::chrono::steady_clock::time_point pts) {
+      if (!epoch_) {
+        epoch_ = pts;
+      }
+      using tick = std::chrono::duration<int64_t, std::ratio<1, 90000>>;
+      // Convert signed time before reducing modulo 2^32. Zero triggers Moonlight's
+      // synthetic PTS fallback, so the first source frame starts at tick one.
+      return uint32_t(std::chrono::round<tick>(pts - *epoch_).count()) + 1u;
+    }
+
+  private:
+    std::optional<std::chrono::steady_clock::time_point> epoch_;  ///< First source PTS in this session.
+  };
+
   struct config_t {
     int width;  ///< Video width in pixels.
     int height;  ///< Video height in pixels.

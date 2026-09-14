@@ -23,7 +23,7 @@ socket 必须为绝对路径，两进程 UID 相同。配置也在 Web General �
 | 尺寸／帧率 | Provider 范围至 1920×1080、1–60 FPS；本次实测 1080p60 和 60000/1001 |
 | 色彩 | BT.709 limited、BT.601-525 limited |
 | 参考／slice | 实际单前向参考、无 B 帧、单 slice；max_ref_frames=1 原样协商 |
-| PCM | 48 kHz；Receiver 支持 2／6／8 声道、5／10／20 ms，Provider 当前输出静音 |
+| PCM | 48 kHz；Receiver 支持 2／6／8 声道；普通质量及立体声支持 5／10／20 ms，高质量 5.1／7.1 仅支持 5 ms；Provider 当前输出静音 |
 | 手柄 | Receiver 实现基础状态和振动；当前真实 Provider 接受零手柄能力 |
 
 Mac Moonlight 6.1.0 的默认请求是 BT.601 limited。本次在独立 Provider 中增加实际 MPP BT.601 RGB 转换及 SPS/VUI 校验。原生 BT.709 NV12 需要该输出时，先由 RGA 按 BT.709 转 BGR，再由 MPP 按 BT.601 转换；没有在 Receiver 修改请求或仅改色彩标签。BT.709 NV12 可继续直入 MPP；尺寸／对齐不足时仍由 RGA 处理。
@@ -35,13 +35,13 @@ Mac Moonlight 6.1.0 的默认请求是 BT.601 limited。本次在独立 Provider
 - /launch、/resume 固定输入，ANNOUNCE 转换完整参数后才 CONNECT。有限异步握手不会阻塞其他 RTSP 请求；200 在 CONNECTED 后返回，不等待后续 UDP ping。
 - 资源校验覆盖 4 个队列、8 个真正的 DMA-BUF 和 PCM 池；验证预算、布局、大小、权限、唯一性、memfd 固定大小、空队列和单调时钟。错误／取消路径关闭 fd 并回滚。
 - 视频先 READ START，然后验证和引用共享槽。网络分包缓冲复制所需字节后发出完成通知；原 consumer 执行 READ END 和 dequeue。没有预先整帧复制到通用编码包。映射和会话由租约保活。
-- Provider PTS 驱动 RTP，采集时间只做延迟统计。网络帧号从 1 开始。IDR 请求既检查 RESULT，也检查之后实际 IDR，最多三次有限等待。
+- Provider PTS 驱动会话独立的 RTP 时钟，首帧从 tick 1 开始，后续保留源时间间隔；已排队的首帧不会因早于发送线程启动而回绕。采集时间只做延迟统计。网络帧号从 1 开始。IDR 请求既检查 RESULT，也检查之后实际 IDR，最多三次有限等待。
 - PCM 复制后立即归还共享槽，之后进行 Opus 编码。sample_index 保留缺块时间，discontinuity 重置编码器并重新对齐音频 FEC 块；不会压缩时间缺口。
 - 本地队列采用有界提交，满队列不清空引用链。Linux UDP 使用非阻塞发送，每次调用共用 100 ms 截止时间；发送失败结束对应会话，不让等待无限占住映射和路由状态。
 - 停止顺序为结束本地共享读取、STOP_REQUEST、STOPPED／连接失败、释放映射。网络包独立保活会话，清理后等待包所有权归零。
 - 手柄在单一控制 worker 中分配非零会话内 ID，显式转换按键、轴和扳机；仅使用 ACCEPT 和设备能力交集。旧 ID 的迟到振动被丢弃。零能力不会发布共享手柄事件。
 
-20 ms 的高码率 7.1 Opus 包可能大于以太网 MTU；本端按实际编码包长度分配缓冲，不将大包截断。真实 Mac 客户端本次使用立体声 5 ms，其余声道与时长由独立 Opus 解码测试验证。
+Moonlight 的音频 UDP 接收缓冲为 1400 字节，包含 RTP／FEC 头。Opus 载荷上限为 1360 字节，并预留 CBC padding；数据包和 FEC 包的上限由编译期检查保证。高质量 5.1／7.1 的 10／20 ms 请求在连接 Provider 前明确拒绝，不静默降低质量或改变包长。真实 Mac 客户端此前使用立体声 5 ms；本地 Opus 解码通过不能替代客户端数据包大小校验。
 
 ## 可复现的有限入口
 
@@ -99,3 +99,12 @@ Moonlight 添加 `rock-5b-plus.local:49089`，在该实例 Web UI（49090）批�
 | 物理 HDMI 拔插 | **未验证**：已执行一次现有唤醒命令并收到完成确认，HDMIRX 仍报告无信号；test-cycle 不代替真实拔插 |
 
 此实现不包含真实 HDMI 音频采集或 ESP32 手柄后端，也不将静音传输解释为真实音频采集。当前未验证真实 HDMI 拔插／输入模式变化、4K 输出和非 Linux 构建。后续只需在有信号的 HDMI 链路上补做有限现场验收，不应将本记录中的模拟输入称作 Xbox 画面。
+
+
+## 代码评审修复验证（2026-09-14）
+
+修复了首帧早于发送线程启动时的 RTP 时间戳回绕，以及高质量环绕声长包超过 Moonlight 接收缓冲的问题。每个会话以首帧 PTS 建立独立时钟；音频根据质量与包长校验 CBR 大小，并在 CONNECT_REQUEST 前拒绝超限组合。CBC 输出槽显式预留完整 padding 块。
+
+板端重新构建 sunshine、test_sunshine 和 test_streamhub_transport 成功；上述隔离回归入口运行 116 项测试、26 个套件，全部通过。新增覆盖首帧排队、PTS 间隙、会话时钟隔离、四个超限音频组合在连接 Provider 前被拒绝，以及最大载荷的 CBC padding 边界。独立 Opus 解码覆盖剩余 14 个质量／声道／包长组合和声道隔离。
+
+额外调用实际 UDP 分包路径的有限回环复现通过：首帧 RTP tick 为 1，源 PTS 相隔 50 ms 的下一帧为 4501，同一发送线程上的新会话重新从 1 开始。本轮没有重跑真实 Moonlight／HDMI 现场验收，也没有部署或重启在线服务。
