@@ -219,6 +219,11 @@ namespace avahi {
   );
 
   /**
+   * @brief Function pointer used to publish a raw DNS record with an entry group.
+   */
+  typedef int (*entry_group_add_record_fn)(EntryGroup *, IfIndex, Protocol, PublishFlags, const char *, uint16_t, uint16_t, uint32_t, const void *, size_t);
+
+  /**
    * @brief Function pointer used to test whether an Avahi entry group is empty.
    */
   typedef int (*entry_group_is_empty_fn)(EntryGroup *);
@@ -271,6 +276,7 @@ namespace avahi {
   alternative_service_name_fn alternative_service_name;  ///< Alternative service name.
   entry_group_get_client_fn entry_group_get_client;  ///< Entry group get client.
   entry_group_new_fn entry_group_new;  ///< Entry group new.
+  entry_group_add_record_fn entry_group_add_record;  ///< Raw DNS record publisher.
   entry_group_add_service_fn entry_group_add_service;  ///< Entry group add service.
   entry_group_is_empty_fn entry_group_is_empty;  ///< Entry group is empty.
   entry_group_reset_fn entry_group_reset;  ///< Entry group reset.
@@ -353,6 +359,7 @@ namespace avahi {
       {(dyn::apiproc *) &client_free, "avahi_client_free"},
       {(dyn::apiproc *) &entry_group_get_client, "avahi_entry_group_get_client"},
       {(dyn::apiproc *) &entry_group_new, "avahi_entry_group_new"},
+      {(dyn::apiproc *) &entry_group_add_record, "avahi_entry_group_add_record"},
       {(dyn::apiproc *) &entry_group_add_service, "avahi_entry_group_add_service"},
       {(dyn::apiproc *) &entry_group_is_empty, "avahi_entry_group_is_empty"},
       {(dyn::apiproc *) &entry_group_reset, "avahi_entry_group_reset"},
@@ -488,6 +495,17 @@ namespace platf::publish {
         BOOST_LOG(error) << "Failed to add "sv << platf::SERVICE_TYPE << " service: "sv << avahi::strerror(ret);
         return;
       }
+
+      // iOS Bonjour browsers with an empty domain enumerate automatic browse
+      // domains before looking up _nvstream. Publish the local domain explicitly
+      // as a shared PTR, owned by the same group as the streaming service.
+      static constexpr unsigned char local_domain[] = {5, 'l', 'o', 'c', 'a', 'l', 0};
+      ret = avahi::entry_group_add_record(group, avahi::IF_UNSPEC, avahi::PROTO_UNSPEC, avahi::PublishFlags(0), "lb._dns-sd._udp.local", 1, 12, 120, local_domain, sizeof(local_domain));
+      if (ret < 0) {
+        BOOST_LOG(error) << "Failed to publish local browse domain: "sv << avahi::strerror(ret);
+        return;
+      }
+      BOOST_LOG(info) << "Publishing local Bonjour browse domain"sv;
 
       ret = avahi::entry_group_commit(group);
       if (ret < 0) {

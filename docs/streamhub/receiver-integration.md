@@ -110,3 +110,29 @@ Moonlight 添加 `rock-5b-plus.local:49089`，在该实例 Web UI（49090）批�
 板端重新构建 sunshine、test_sunshine 和 test_streamhub_transport 成功；上述隔离回归入口运行 116 项测试、26 个套件，全部通过。新增覆盖首帧排队、PTS 间隙、会话时钟隔离、四个超限音频组合在连接 Provider 前被拒绝，以及最大载荷的 CBC padding 边界。独立 Opus 解码覆盖剩余 14 个质量／声道／包长组合和声道隔离。
 
 额外调用实际 UDP 分包路径的有限回环复现通过：首帧 RTP tick 为 1，源 PTS 相隔 50 ms 的下一帧为 4501，同一发送线程上的新会话重新从 1 开始。本轮没有重跑真实 Moonlight／HDMI 现场验收，也没有部署或重启在线服务。
+
+## 板端直接运行的部署注意事项（2026-09-14）
+
+构建目录直接运行时，编译定义 `SUNSHINE_ASSETS_DIR_DEF` 必须指向实际 assets 目录；本机使用 `/home/vicent/Documents/Projects/streamhub/sunshine/cmake-build-slimming-baseline/assets`。Web 文件由既有 Vite 构建输出到该目录的 web 子目录。默认 `/usr/local/assets` 未安装时，认证仍可成功，但首页会返回 HTTP 200、零字节正文，表现为白屏。改变工作目录不能修复绝对资源路径，应重新配置并构建主程序。
+
+本机 Homebrew libdbus 的默认系统总线地址不属于系统 Avahi。运行 Sunshine 时显式设置 `DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket`，否则即使系统 avahi-daemon 正常也会报告 `Failed to create client: Daemon not running`，导致 Moonlight 自动发现缺失。正确启动日志应包含 Avahi service successfully established；局域网 DNS-SD 查询应发现 `_nvstream._tcp` 并返回实际端口。
+
+隔离验收最初使用 Moonlight 地址 `192.168.0.110:49089` 或 `rock-5b-plus.local:49089`，管理页面为 `https://192.168.0.110:49090`。非默认串流端口必须包含在手动添加的地址中，不能只填写主机名。手机侧是否能解析 .local 仍取决于其网络与 mDNS 支持。
+
+本次重新构建并重启后，认证首页、配置页、PIN 页分别返回 5186、4559、3529 字节，引用的 18 个 JS/CSS/module 资源全部返回 HTTP 200 且非空。Mac DNS-SD 实测发现 rock-5b-plus 服务并解析到 rock-5b-plus.local:49089；StreamHub 和 Sunshine 均保持 active。手机界面需由用户刷新复核。首次重启旧进程时日志出现一次退出阶段 SIGSEGV；修正总线后的下一次重启未再出现，退出异常根因未在本次部署修复中调查。
+
+当时的持续运行实例为排查 iPhone 主机名添加与自动发现问题，改为默认 port=47989；Moonlight 可填写 rock-5b-plus.local 或 192.168.0.110，管理页面改为 https://192.168.0.110:47990。主机 ID 与配对状态保留。默认端口服务信息和认证首页均已实测可用，Avahi 注册成功；用户随后明确：默认端口下手动添加主机名成功，但 iPhone 自动发现仍然失败。保留默认端口用于测试；手动添加改善不代表自动发现已修复，也未定位客户端内部根因。用户已确认 Android 能自动发现，iPhone Safari 在变更前能用主机名访问 serverinfo 并收到正确 LocalIP，但 Moonlight iOS 带端口的主机名添加报告仅允许本地网络。
+
+## iPhone 默认发现域修复（2026-09-15）
+
+现场 iPhone（iOS 26）主机列表为空，Android 和 Mac 能发现同一服务，iPhone Safari 可通过 rock-5b-plus.local 访问正确 serverinfo；默认端口只解决了手动主机名添加，不能据此声称自动发现已恢复。
+
+通过 macOS Console 读取已配对 iPhone 的日志，Moonlight 每五秒发起 DNSServiceBrowse，随后记录默认域枚举与取消；对应时间窗没有观察到来自该手机的 _nvstream 查询。仅 IPv4 的新服务名称对照仍不能被自动发现。临时发布 lb._dns-sd._udp.local PTR local. 后，用户立即确认自动出现主机。该结果定位本次自动发现阻塞于默认浏览域枚举，不证明所有 iOS 26 设备均存在同样状态。
+
+Sunshine Linux Avahi 发布现在将这条共享 PTR 与串流服务放入同一 EntryGroup，TTL 为 120 秒；发布失败明确记录错误。原有进程退出、碰撞重建和组重置共同管理记录，不需要额外常驻脚本、手机代理修改或手动录入地址。通过动态加载 Avahi 既有公开 API 实现，未引入新生产依赖。
+
+生产 sunshine 重新构建通过。新增真实 Avahi 生命周期测试 tests/run-browse-domain-test.py，观察启动后的 PTR 和正常 SIGTERM 后的撤销；实测通过，证据保存在 var/tests/browse-domain-dtyyc0wu。该有限测试要求板端 python3-dbus、PyGObject 和系统 Avahi，无需打开 HDMI，使用独立 50089 端口及 var/tests 隔离状态。已有同名浏览域记录时明确拒绝测试，以免把其他发布者当成被测进程的结果。
+
+复现：在产品根目录执行 python3 tools/run.py --development -- python3 sunshine/tests/run-browse-domain-test.py，传 --sunshine 指向本次构建程序，--runtime-library-path 沿用本页板端 Homebrew 动态库路径；--interface 默认 wlP2p33s0。
+
+临时诊断发布者已按时退出，iPhone 日志采集已停止。在线实例切换到产品 var/ 状态的进度由总项目 docs/storage-validation.md 记录；不得通过启动旧 /tmp 状态绕过当前目录限制。
