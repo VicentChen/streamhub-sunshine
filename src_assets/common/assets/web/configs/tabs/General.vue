@@ -49,6 +49,23 @@ const config = ref(props.config)
       <div class="form-text">{{ $t('config.sunshine_name_desc') }}</div>
     </div>
 
+    <div class="mb-3">
+      <label for="streamhub_socket" class="form-label">{{ $t('config.streamhub_socket') }}</label>
+      <input type="text" class="form-control" id="streamhub_socket"
+             v-model="config.streamhub_socket" />
+      <div class="form-text">{{ $t('config.streamhub_socket_desc') }}</div>
+    </div>
+
+    <div class="mb-3">
+      <label for="streamhub_codecs" class="form-label">{{ $t('config.streamhub_codecs') }}</label>
+      <select class="form-select" id="streamhub_codecs" v-model="config.streamhub_codecs">
+        <option value="h264,hevc">H.264 + HEVC</option>
+        <option value="h264">H.264</option>
+        <option value="hevc">HEVC</option>
+      </select>
+      <div class="form-text">{{ $t('config.streamhub_codecs_desc') }}</div>
+    </div>
+
     <!-- Log Level -->
     <div class="mb-3">
       <label for="min_log_level" class="form-label">{{ $t('config.min_log_level') }}</label>

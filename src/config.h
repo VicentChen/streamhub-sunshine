@@ -154,6 +154,9 @@ namespace config {
     std::vector<std::string> csrf_allowed_origins;  ///< Additional origins allowed by CSRF validation.
   };
 
+  extern std::string streamhub_codecs;  ///< Explicit tested codec set: h264, hevc or h264,hevc.
+  extern std::string streamhub_socket;  ///< Explicit Provider socket path; empty disables connection.
+
   extern video_t video;
   extern stream_t stream;
   extern nvhttp_t nvhttp;

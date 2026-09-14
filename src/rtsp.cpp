@@ -28,6 +28,7 @@ extern "C" {
 #include "logging.h"
 #include "network.h"
 #include "rtsp.h"
+#include "process.h"
 #include "stream.h"
 #include "sync.h"
 #include "video.h"
@@ -141,6 +142,9 @@ namespace rtsp_stream {
   /**
    * @brief RTSP client socket state and receive buffer parser.
    */
+  std::mutex announcement_mutex;  ///< Guards pending Provider handshake jobs.
+  std::vector<std::pair<std::shared_ptr<launch_session_t>, std::future<void>>> announcements;  ///< Bounded cancellable handshakes.
+
   class socket_t: public std::enable_shared_from_this<socket_t> {
   public:
     /**
@@ -449,7 +453,31 @@ namespace rtsp_stream {
      * @param req Parsed RTSP request being handled.
      */
     void handle_data(msg_t &&req) {
-      handle_data_fn(sock, *session, std::move(req));
+      if (std::string_view(req->message.request.command) != "ANNOUNCE") {
+        handle_data_fn(sock, *session, std::move(req));
+        return;
+      }
+      std::lock_guard guard(announcement_mutex);
+      std::erase_if(announcements, [](auto &job) {
+        if (job.second.wait_for(0ms) != std::future_status::ready) {
+          return false;
+        }
+        job.second.get();
+        return true;
+      });
+      if (announcements.size() >= 8 || session->announcing.exchange(true)) {
+        respond(sock, *session, nullptr, 453, "Session already pending", req->sequenceNumber, {});
+        return;
+      }
+      announcements.emplace_back(session, std::async(std::launch::async, [socket = shared_from_this(), request = std::move(req)]() mutable {
+                                   try {
+                                     socket->handle_data_fn(socket->sock, *socket->session, std::move(request));
+                                   } catch (const std::exception &e) {
+                                     BOOST_LOG(error) << "RTSP asynchronous handshake failed: " << e.what();
+                                     boost::system::error_code error;
+                                     socket->sock.close(error);
+                                   }
+                                 }));
     }
 
     std::function<void(tcp::socket &sock, launch_session_t &, msg_t &&)> handle_data_fn;  ///< Command dispatcher installed by the RTSP server.
@@ -592,6 +620,7 @@ namespace rtsp_stream {
      * @param launch_session Streaming session information.
      */
     void session_raise(std::shared_ptr<launch_session_t> launch_session) {
+      std::lock_guard guard(launch_mutex);
       // If a launch event is still pending, don't overwrite it.
       if (launch_event.view(0s)) {
         return;
@@ -604,8 +633,14 @@ namespace rtsp_stream {
       raised_timer.expires_after(config::stream.ping_timeout);
       raised_timer.async_wait([this](const boost::system::error_code &ec) {
         if (!ec) {
+          std::lock_guard guard(launch_mutex);
           auto discarded = launch_event.pop(0s);
           if (discarded) {
+            std::lock_guard lifecycle(discarded->lifecycle);
+            discarded->cancel.request_stop();
+            if (!discarded->resuming && proc::proc.running() == discarded->appid) {
+              proc::proc.terminate();
+            }
             BOOST_LOG(debug) << "Event timeout: "sv << discarded->unique_id;
           }
         }
@@ -617,6 +652,7 @@ namespace rtsp_stream {
      * @param launch_session_id The ID of the session to clear.
      */
     void session_clear(uint32_t launch_session_id) {
+      std::lock_guard guard(launch_mutex);
       // We currently only support a single pending RTSP session,
       // so the ID should always match the one for that session.
       auto launch_session = launch_event.view(0s);
@@ -649,6 +685,9 @@ namespace rtsp_stream {
      * @examples_end
      */
     void clear(bool all = true) {
+      if (all) {
+        cancel_pending();
+      }
       auto lg = _session_slots.lock();
 
       for (auto i = _session_slots->begin(); i != _session_slots->end();) {
@@ -670,6 +709,15 @@ namespace rtsp_stream {
      * @param cert Certificate data or object used by the operation.
      */
     void clear_by_cert(std::string_view cert) {
+      {
+        std::lock_guard guard(announcement_mutex);
+        for (auto &job : announcements) {
+          if (job.first->client_cert == cert) {
+            std::lock_guard lifecycle(job.first->lifecycle);
+            job.first->cancel.request_stop();
+          }
+        }
+      }
       auto lg = _session_slots.lock();
       for (auto i = _session_slots->begin(); i != _session_slots->end();) {
         auto &slot = *(*i);
@@ -718,7 +766,34 @@ namespace rtsp_stream {
     /**
      * @brief Stop the RTSP server.
      */
+    /** @brief Cancel launch and handshake work before clearing active sessions. */
+    void cancel_pending() {
+      {
+        std::lock_guard guard(launch_mutex);
+        auto pending = launch_event.pop(0s);
+        raised_timer.cancel();
+        if (pending) {
+          std::lock_guard lifecycle(pending->lifecycle);
+          pending->cancel.request_stop();
+        }
+      }
+      std::lock_guard guard(announcement_mutex);
+      for (auto &job : announcements) {
+        std::lock_guard lifecycle(job.first->lifecycle);
+        job.first->cancel.request_stop();
+      }
+    }
+
     void stop() {
+      cancel_pending();
+      std::vector<std::pair<std::shared_ptr<launch_session_t>, std::future<void>>> jobs;
+      {
+        std::lock_guard guard(announcement_mutex);
+        jobs.swap(announcements);
+      }
+      for (auto &job : jobs) {
+        job.second.get();
+      }
       acceptor.close();
       io_context.stop();
       clear();
@@ -732,6 +807,7 @@ namespace rtsp_stream {
     boost::asio::io_context io_context;
     tcp::acceptor acceptor {io_context};
     boost::asio::steady_timer raised_timer {io_context};
+    std::mutex launch_mutex;  ///< Serializes timer mutation and launch ownership.
 
     std::shared_ptr<socket_t> next_socket;
   };
@@ -798,6 +874,7 @@ namespace rtsp_stream {
    * @param resp RTSP response string to send to the client.
    */
   void respond(tcp::socket &sock, launch_session_t &session, msg_t &resp) {
+    std::lock_guard guard(session.reply_mutex);
     auto payload = std::make_pair(resp->payload, resp->payloadLength);
 
     // Restore response message for proper destruction
@@ -1070,6 +1147,16 @@ namespace rtsp_stream {
    * @param req Parsed RTSP request being handled.
    */
   void cmd_announce(rtsp_server_t *server, tcp::socket &sock, launch_session_t &session, msg_t &&req) {
+    auto rollback = util::fail_guard([&] {
+      // A cancelled launch may already have been replaced; never clear the replacement.
+      {
+        std::lock_guard lifecycle(session.lifecycle);
+        if (!session.resuming && !session.cancel.stop_requested() && proc::proc.running() == session.appid) {
+          proc::proc.terminate();
+        }
+      }
+      server->session_clear(session.id);
+    });
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
@@ -1114,7 +1201,7 @@ namespace rtsp_stream {
         auto name = line.substr(2, pos - 2);
         auto val = line.substr(pos + 1);
 
-        if (val[val.size() - 1] == ' ') {
+        if (!val.empty() && val.back() == ' ') {
           val = val.substr(0, val.size() - 1);
         }
         args.emplace(name, val);
@@ -1138,7 +1225,7 @@ namespace rtsp_stream {
     args.try_emplace("x-ss-video[0].intraRefresh"sv, "0"sv);
     args.try_emplace("x-nv-video[0].clientRefreshRateX100"sv, "0"sv);
 
-    stream::config_t config;
+    stream::config_t config {};
 
     std::int64_t configuredBitrateKbps;
     try {
@@ -1293,16 +1380,23 @@ namespace rtsp_stream {
     }
 
     auto stream_session = stream::session::alloc(config, session);
-    server->insert(stream_session);
-
-    if (stream::session::start(*stream_session, sock.remote_endpoint().address().to_string())) {
-      BOOST_LOG(error) << "Failed to start a streaming session"sv;
-
-      server->remove(stream_session);
-      respond(sock, session, &option, 500, "Internal Server Error", req->sequenceNumber, {});
+    if (stream::session::prepare(*stream_session, session)) {
+      respond(sock, session, &option, 503, "Provider negotiation failed", req->sequenceNumber, {});
       return;
     }
-
+    {
+      std::lock_guard lifecycle(session.lifecycle);
+      if (session.cancel.stop_requested()) {
+        respond(sock, session, &option, 503, "Launch cancelled", req->sequenceNumber, {});
+        return;
+      }
+      if (stream::session::start(*stream_session, sock.remote_endpoint().address().to_string())) {
+        respond(sock, session, &option, 500, "Transport startup failed", req->sequenceNumber, {});
+        return;
+      }
+      server->insert(stream_session);
+    }
+    rollback.disable();
     respond(sock, session, &option, 200, "OK", req->sequenceNumber, {});
   }
 

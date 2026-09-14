@@ -74,13 +74,17 @@ namespace input {
   }
 
   std::shared_ptr<input_t> alloc(safe::mail_t mail) {
-    return std::make_shared<input_t>(input_t {mail->queue<gamepad_event_t>("gamepad_input")});
+    auto state = std::make_shared<input_t>();
+    state->events = mail->queue<gamepad_event_t>("gamepad_input");
+    return state;
   }
 
   void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&bytes) {
     if (input) {
       if (auto event = decode(bytes)) {
-        input->events->raise(std::move(*event));
+        if (!input->events->try_raise(std::move(*event))) {
+          input->overflow.store(true);
+        }
       }
     }
   }

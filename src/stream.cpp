@@ -1,3 +1,7 @@
+#ifdef __linux__
+  #include "streamhub/gamepad.h"
+  #include "streamhub/media.h"
+#endif
 /**
  * @file src/stream.cpp
  * @brief Definitions for the streaming protocols.
@@ -485,7 +489,13 @@ namespace stream {
   /**
    * @brief Runtime state for one audio/video streaming session.
    */
-  struct session_t {
+  struct session_t: std::enable_shared_from_this<session_t> {
+#ifdef __linux__
+    std::unique_ptr<streamhub::receiver> provider;  ///< Per-stream control and resource ownership.
+    std::jthread providerThread;  ///< Sole Provider control/gamepad worker.
+    std::atomic_bool provider_idr {false};  ///< Video worker requests an IDR through the control owner.
+    std::atomic_uint network_packets {0};  ///< Packets still referencing session network state.
+#endif
     config_t config;  ///< Stream or encoder configuration captured for the worker.
 
     safe::mail_t mail;  ///< Mailbox used to distribute packets and lifecycle events.
@@ -1535,6 +1545,9 @@ namespace stream {
       frame_network_latency_logger.first_point_now();
 
       auto session = (session_t *) packet->channel_data;
+      if (session->shutdown_event->peek()) {
+        continue;
+      }
       auto lowseq = session->video.lowseq;
 
       std::string_view payload {(char *) packet->data(), packet->data_size()};
@@ -1569,6 +1582,7 @@ namespace stream {
       auto payload_new = concat_and_insert(sizeof(video_packet_raw_t), payload_blocksize, std::string_view {(char *) &frame_header, sizeof(frame_header)}, payload);
 
       payload = std::string_view {(char *) payload_new.data(), payload_new.size()};
+      packet->source_consumed();
 
       // There are 2 bits for FEC block count for a maximum of 4 FEC blocks
       constexpr auto MAX_FEC_BLOCKS = 4;
@@ -1688,12 +1702,12 @@ namespace stream {
           // RTP video timestamps use a 90 KHz clock and the frame_timestamp from when the frame was captured
           // When a timestamp isn't available (duplicate frames), the timestamp from rate control is used instead.
           bool frame_is_dupe = false;
-          if (!packet->frame_timestamp) {
+          if (!packet->presentation_time && !packet->frame_timestamp) {
             packet->frame_timestamp = ratecontrol_next_frame_start;
             frame_is_dupe = true;
           }
           using rtp_tick = std::chrono::duration<uint32_t, std::ratio<1, 90000>>;
-          uint32_t timestamp = std::chrono::round<rtp_tick>(*packet->frame_timestamp - video_epoch).count();
+          uint32_t timestamp = std::chrono::round<rtp_tick>(packet->presentation_time.value_or(packet->frame_timestamp.value_or(ratecontrol_next_frame_start)) - video_epoch).count();
 
           // set FEC info now that we know for sure what our percentage will be for this frame
           for (auto x = 0; x < shards.size(); ++x) {
@@ -1770,7 +1784,9 @@ namespace stream {
                     session->localAddress,
                   };
 
-                  platf::send(send_info);
+                  if (!platf::send(send_info)) {
+                    throw std::runtime_error("UDP video send failed");
+                  }
                 }
               }
               frame_send_batch_latency_logger.second_point_now_and_log();
@@ -1801,7 +1817,7 @@ namespace stream {
         session->video.lowseq = lowseq;
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Broadcast video failed "sv << e.what();
-        std::this_thread::sleep_for(100ms);
+        session::stop(*session);
       }
     }
 
@@ -1842,9 +1858,18 @@ namespace stream {
         break;
       }
 
-      TUPLE_2D_REF(channel_data, packet_data, *packet);
+      auto channel_data = packet->first;
+      auto &packet_data = packet->second;
       auto session = (session_t *) channel_data;
 
+      if (session->shutdown_event->peek()) {
+        continue;
+      }
+      if (packet->timestamp && *packet->timestamp != session->audio.timestamp) {
+        // Start a fresh FEC block after a PCM gap; parity must not span discontinuous timestamps.
+        session->audio.sequenceNumber = uint16_t((session->audio.sequenceNumber + RTPA_DATA_SHARDS - 1) & ~(RTPA_DATA_SHARDS - 1));
+        session->audio.timestamp = *packet->timestamp;
+      }
       auto sequenceNumber = session->audio.sequenceNumber;
       auto timestamp = session->audio.timestamp;
 
@@ -1855,7 +1880,8 @@ namespace stream {
       auto bytes = encode_audio(session->config.encryptionFlagsEnabled & SS_ENC_AUDIO, packet_data, shards_p[sequenceNumber % RTPA_DATA_SHARDS], iv, session->audio.cipher);
       if (bytes < 0) {
         BOOST_LOG(error) << "Couldn't encode audio packet"sv;
-        break;
+        session::stop(*session);
+        continue;
       }
 
       BOOST_LOG(verbose) << "Audio [seq "sv << sequenceNumber << ", pts "sv << timestamp << "] ::  send..."sv;
@@ -1878,7 +1904,9 @@ namespace stream {
           session->audio.peer.port(),
           session->localAddress,
         };
-        platf::send(send_info);
+        if (!platf::send(send_info)) {
+          throw std::runtime_error("UDP audio send failed");
+        }
 
         auto &fec_packet = session->audio.fec_packet;
         // initialize the FEC header at the beginning of the FEC block
@@ -1905,13 +1933,15 @@ namespace stream {
               session->audio.peer.port(),
               session->localAddress,
             };
-            platf::send(send_info);
+            if (!platf::send(send_info)) {
+              throw std::runtime_error("UDP audio send failed");
+            }
             BOOST_LOG(verbose) << "Audio FEC ["sv << (sequenceNumber & ~(RTPA_DATA_SHARDS - 1)) << ' ' << x << "] ::  send..."sv;
           }
         }
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Broadcast audio failed "sv << e.what();
-        std::this_thread::sleep_for(100ms);
+        session::stop(*session);
       }
     }
 
@@ -2089,6 +2119,196 @@ namespace stream {
     return -1;
   }
 
+#ifdef __linux__
+  /** @brief Packet-owned session reference counted independently from DMA read completion. */
+  struct network_lease {
+    std::shared_ptr<session_t> owner;  ///< Retains routing and cipher state.
+
+    explicit network_lease(std::shared_ptr<session_t> session):
+        owner(std::move(session)) {
+      ++owner->network_packets;
+    }
+
+    ~network_lease() {
+      --owner->network_packets;
+    }
+  };
+
+  /** @brief An encoded packet borrowing exactly one synchronized Provider DMA slot. */
+  class provider_packet final: public video::packet_raw_t {
+  public:
+    explicit provider_packet(streamhub::video_frame frame, session_t &session):
+        frame_(std::move(frame)) {
+      channel_data = &session;
+      lifetime = std::make_shared<network_lease>(session.shared_from_this());
+      presentation_time = std::chrono::steady_clock::time_point(std::chrono::nanoseconds(frame_.info.pts_ns));
+      if (frame_.info.capture_time_ns) {
+        frame_timestamp = std::chrono::steady_clock::time_point(std::chrono::nanoseconds(frame_.info.capture_time_ns));
+      }
+    }
+
+    bool is_idr() override {
+      return frame_.info.flags & streamhub::protocal::video_frame_flags::idr;
+    }
+
+    int64_t frame_index() override {
+      return frame_.network_index;
+    }
+
+    uint8_t *data() override {
+      return const_cast<uint8_t *>(frame_.bytes.data());
+    }
+
+    size_t data_size() override {
+      return frame_.bytes.size();
+    }
+
+    void source_consumed() override {
+      frame_.lease->complete();
+    }
+
+  private:
+    streamhub::video_frame frame_;  ///< DMA bytes and completion notification.
+  };
+
+  /** @brief Pump control and both controller queues while media workers own their separate consumers. */
+  void providerThread(std::stop_token stop, session_t *session) {
+    bool healthy = true;
+    try {
+      streamhub::gamepad_bridge controllers(session->provider->memory(), session->provider->accepted().gamepad);
+      while (!stop.stop_requested()) {
+        if (!session->provider->poll()) {
+          throw std::runtime_error("Provider stopped the session");
+        }
+        if (!session->shutdown_event->peek()) {
+          if (session->provider_idr.exchange(false)) {
+            session->provider->request_idr();
+          }
+          if (session->input->overflow.load()) {
+            throw std::runtime_error("Moonlight controller queue overflow");
+          }
+          if (controllers.ready()) {
+            if (auto event = session->input->events->pop(0ms)) {
+              if (auto arrival = std::get_if<platf::gamepad_arrival_t>(&event->data)) {
+                controllers.arrival(event->controller, arrival->supportedButtons, bool(arrival->capabilities & LI_CCAP_RUMBLE));
+              }
+              if (auto state = std::get_if<input::gamepad_state_t>(&event->data)) {
+                const auto &s = state->state;
+                controllers.state(event->controller, state->active_mask, {s.buttonFlags, s.lt, s.rt, s.lsX, s.lsY, s.rsX, s.rsY});
+              }
+            }
+          }
+          controllers.flush();
+          if (auto feedback = controllers.feedback()) {
+            if (!session->control.feedback_queue->try_raise(platf::gamepad_feedback_msg_t::make_rumble(feedback->index, feedback->low, feedback->high))) {
+              throw std::runtime_error("Moonlight feedback queue overflow");
+            }
+          }
+        }
+        std::this_thread::sleep_for(1ms);
+      }
+    } catch (const std::exception &e) {
+      healthy = false;
+      BOOST_LOG(error) << "StreamHub control session failed: " << e.what();
+      session::stop(*session);
+    }
+    // join() requests this token only after video/audio have stopped all shared reads.
+    while (!stop.stop_requested()) {
+      std::this_thread::sleep_for(1ms);
+    }
+    if (healthy) {
+      try {
+        session->provider->stop();
+      } catch (const std::exception &e) {
+        BOOST_LOG(warning) << "StreamHub stop failed: " << e.what();
+      }
+    }
+  }
+
+  /** @brief Submit DMA-backed video with bounded backpressure and original-consumer reclamation. */
+  void providerVideo(session_t *session) {
+    streamhub::video_reader reader(session->provider->memory(), session->provider->accepted().video.format.codec);
+    auto packets = mail::man->queue<video::packet_t>(mail::video_packets);
+    video::packet_t pending;
+    bool awaiting_idr = false;
+    uint64_t requested_at = 0;
+    int retries = 0;
+    auto idr_deadline = std::chrono::steady_clock::time_point {};
+    try {
+      while (!session->shutdown_event->peek()) {
+        auto request = session->video.idr_events->pop(0ms);
+        auto invalidation = session->video.invalidate_ref_frames_events->pop(0ms);
+        if (request || invalidation) {
+          awaiting_idr = true;
+          retries = 0;
+          requested_at = streamhub::monotonic_ns();
+          session->provider_idr.store(true);
+          idr_deadline = std::chrono::steady_clock::now() + 1s;
+        }
+        if (awaiting_idr && std::chrono::steady_clock::now() >= idr_deadline) {
+          if (++retries >= 3) {
+            throw std::runtime_error("Provider did not produce a requested IDR");
+          }
+          session->provider_idr.store(true);
+          idr_deadline = std::chrono::steady_clock::now() + 1s;
+        }
+        if (!pending) {
+          if (auto frame = reader.next()) {
+            if (awaiting_idr && (frame->info.flags & streamhub::protocal::video_frame_flags::idr) && frame->info.pts_ns >= requested_at) {
+              awaiting_idr = false;
+            }
+            pending = std::make_unique<provider_packet>(std::move(*frame), *session);
+          }
+        }
+        if (pending && !packets->try_raise(std::move(pending)) && !packets->running()) {
+          throw std::runtime_error("Video network queue stopped");
+        }
+        std::this_thread::sleep_for(1ms);
+      }
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "StreamHub video failed: " << e.what();
+      session::stop(*session);
+    }
+    pending.reset();
+    packets->discard_if([&](const auto &packet) {
+      return packet->channel_data == session;
+    });
+    while (!reader.reclaim()) {
+      std::this_thread::sleep_for(1ms);
+    }
+  }
+
+  /** @brief Encode copied PCM on its source timeline and keep all queues bounded. */
+  void providerAudio(session_t *session) {
+    streamhub::audio_reader reader(session->provider->memory(), session->provider->accepted().audio);
+    audio::pcm_encoder encoder(session->config.audio);
+    auto packets = mail::man->queue<audio::packet_t>(mail::audio_packets);
+    std::optional<uint64_t> first_sample;
+    while (!session->shutdown_event->peek()) {
+      auto frame = reader.next();
+      if (!frame) {
+        std::this_thread::sleep_for(1ms);
+        continue;
+      }
+      if (!first_sample) {
+        first_sample = frame->sample_index;
+      }
+      if (frame->discontinuity) {
+        encoder.reset();
+      }
+      audio::packet_t packet(session, encoder.encode(frame->samples));
+      packet.timestamp = uint32_t((frame->sample_index - *first_sample) / 48);
+      packet.lifetime = std::make_shared<network_lease>(session->shared_from_this());
+      while (!session->shutdown_event->peek() && !packets->try_raise(std::move(packet))) {
+        if (!packets->running()) {
+          throw std::runtime_error("Audio network queue stopped");
+        }
+        std::this_thread::sleep_for(1ms);
+      }
+    }
+  }
+#endif
+
   /**
    * @brief Receive the video peer handshake and hold its socket QoS lifetime.
    *
@@ -2103,8 +2323,8 @@ namespace stream {
     while_starting_do_nothing(session->state);
 
     auto ref = broadcast.ref();
-    auto error = recv_ping(session, ref, socket_e::video, session->video.ping_payload, session->video.peer, config::stream.ping_timeout);
-    if (error < 0) {
+    auto ping_error = recv_ping(session, ref, socket_e::video, session->video.ping_payload, session->video.peer, config::stream.ping_timeout);
+    if (ping_error < 0) {
       return;
     }
 
@@ -2113,7 +2333,15 @@ namespace stream {
     session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0);
 
     BOOST_LOG(debug) << "Video transport ready"sv;
+#ifdef __linux__
+    try {
+      providerVideo(session);
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "StreamHub video cleanup: " << e.what();
+    }
+#else
     session->shutdown_event->view();
+#endif
   }
 
   /**
@@ -2130,8 +2358,8 @@ namespace stream {
     while_starting_do_nothing(session->state);
 
     auto ref = broadcast.ref();
-    auto error = recv_ping(session, ref, socket_e::audio, session->audio.ping_payload, session->audio.peer, config::stream.ping_timeout);
-    if (error < 0) {
+    auto ping_error = recv_ping(session, ref, socket_e::audio, session->audio.ping_payload, session->audio.peer, config::stream.ping_timeout);
+    if (ping_error < 0) {
       return;
     }
 
@@ -2140,10 +2368,40 @@ namespace stream {
     session->audio.qos = platf::enable_socket_qos(ref->audio_sock.native_handle(), address, session->audio.peer.port(), platf::qos_data_type_e::audio, session->config.audioQosType != 0);
 
     BOOST_LOG(debug) << "Audio transport ready"sv;
+#ifdef __linux__
+    try {
+      providerAudio(session);
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "StreamHub audio failed: " << e.what();
+    }
+#else
     session->shutdown_event->view();
+#endif
   }
 
   namespace session {
+
+    int prepare(session_t &session, rtsp_stream::launch_session_t &launch) {
+#ifdef __linux__
+      try {
+        if (session.config.packetsize <= int(sizeof(NV_VIDEO_PACKET)) || session.config.packetsize > 65507 || session.config.minRequiredFecPackets < 0 || session.config.minRequiredFecPackets > 255) {
+          throw std::invalid_argument("invalid network packet constraints");
+        }
+        const auto &v = session.config.monitor;
+        const auto &a = session.config.audio;
+        streamhub::requirements request {v.width, v.height, v.framerate, v.framerateX100, v.bitrate, v.videoFormat, v.encoderCscMode, v.dynamicRange, v.chromaSamplingType, v.enableIntraRefresh, v.numRefFrames, v.slicesPerFrame, a.channels, a.mask, a.packetDuration};
+        session.provider = std::make_unique<streamhub::receiver>(config::streamhub_socket, streamhub::negotiate(launch.input_id, request), launch.cancel.get_token());
+        BOOST_LOG(info) << "StreamHub CONNECTED input=" << launch.input_id << " session=" << session.provider->id();
+        return 0;
+      } catch (const std::exception &e) {
+        BOOST_LOG(error) << "StreamHub negotiation failed for input " << launch.input_id << ": " << e.what();
+        return -1;
+      }
+#else
+      return -1;
+#endif
+    }
+
     std::atomic_uint running_sessions;  ///< Running sessions.
 
     /**
@@ -2191,9 +2449,32 @@ namespace stream {
       });
 
       BOOST_LOG(debug) << "Waiting for video to end..."sv;
-      session.videoThread.join();
+      if (session.videoThread.joinable()) {
+        session.videoThread.join();
+      }
       BOOST_LOG(debug) << "Waiting for audio to end..."sv;
-      session.audioThread.join();
+      if (session.audioThread.joinable()) {
+        session.audioThread.join();
+      }
+#ifdef __linux__
+      // All shared media reads are finished before STOP_REQUEST.
+      if (session.providerThread.joinable()) {
+        session.providerThread.request_stop();
+        session.providerThread.join();
+      }
+      auto video_packets = mail::man->queue<video::packet_t>(mail::video_packets);
+      auto audio_packets = mail::man->queue<audio::packet_t>(mail::audio_packets);
+      video_packets->discard_if([&](const auto &p) {
+        return p->channel_data == &session;
+      });
+      audio_packets->discard_if([&](const auto &p) {
+        return p.first == &session;
+      });
+      while (session.network_packets.load()) {
+        std::this_thread::sleep_for(1ms);
+      }
+      session.provider.reset();
+#endif
       BOOST_LOG(debug) << "Waiting for control to end..."sv;
       session.controlEnd.view();
       // Reset input on session stop to avoid stuck repeated keys
@@ -2210,10 +2491,17 @@ namespace stream {
      * @brief Start the audio, video, and control workers for a streaming session.
      */
     int start(session_t &session, const std::string &addr_string) {
+#ifdef __linux__
+      if (!session.provider) {
+        return -1;
+      }
+#endif
+      session.state.store(state_e::STARTING);
       session.input = input::alloc(session.mail);
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
+        session.state.store(state_e::STOPPED);
         return -1;
       }
 
@@ -2238,7 +2526,10 @@ namespace stream {
       session.audioThread = std::jthread {audioThread, &session};
       session.videoThread = std::jthread {videoThread, &session};
 
-      session.state.store(state_e::RUNNING, std::memory_order_relaxed);
+      session.state.store(state_e::RUNNING, std::memory_order_release);
+#ifdef __linux__
+      session.providerThread = std::jthread {providerThread, &session};
+#endif
 
       // If this is the first session, invoke the platform callbacks
       ++running_sessions;
@@ -2282,7 +2573,7 @@ namespace stream {
         session->video.gcm_iv_counter = 0;
       }
 
-      constexpr auto max_block_size = crypto::cipher::round_to_pkcs7_padded(2048);
+      constexpr auto max_block_size = crypto::cipher::round_to_pkcs7_padded(audio::max_packet_bytes);
 
       util::buffer_t<char> shards {RTPA_TOTAL_SHARDS * max_block_size};
       util::buffer_t<uint8_t *> shards_p {RTPA_TOTAL_SHARDS};

@@ -5,6 +5,9 @@
 #define BOOST_BIND_GLOBAL_PLACEHOLDERS
 
 #include "process.h"
+#ifdef __linux__
+  #include "streamhub/catalog.h"
+#endif
 
 #include "crypto.h"
 #include "logging.h"
@@ -42,22 +45,33 @@ namespace proc {
   }
 
   int proc_t::activate(int app_id) {
+#ifdef __linux__
+    if (streamhub::inputs) {
+      try {
+        streamhub::inputs->select(app_id);
+        _app_id->store(app_id);
+        return 0;
+      } catch (...) {
+        return 503;
+      }
+    }
+#endif
     auto iter = std::find_if(_apps.begin(), _apps.end(), [app_id](const auto &app) {
       return app.id == std::to_string(app_id);
     });
     if (iter == _apps.end()) {
       return 404;
     }
-    _app_id = app_id;
+    _app_id->store(app_id);
     return 0;
   }
 
   int proc_t::running() {
-    return _app_id;
+    return _app_id->load();
   }
 
   void proc_t::terminate() {
-    _app_id = 0;
+    _app_id->store(0);
   }
 
   const std::vector<ctx_t> &proc_t::get_apps() const {
@@ -69,6 +83,11 @@ namespace proc {
   }
 
   std::string proc_t::get_app_image(int app_id) {
+#ifdef __linux__
+    if (streamhub::inputs) {
+      return DEFAULT_APP_IMAGE_PATH;
+    }
+#endif
     auto iter = std::find_if(_apps.begin(), _apps.end(), [app_id](const auto &app) {
       return app.id == std::to_string(app_id);
     });

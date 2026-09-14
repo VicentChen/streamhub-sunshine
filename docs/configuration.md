@@ -161,6 +161,23 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### streamhub_socket
+
+Absolute filesystem path of the Linux StreamHub Provider control socket.
+Default: empty (source unconfigured). Environment variables and ~ are not expanded.
+Example: `streamhub_socket = /run/user/1000/streamhub/control.sock`.
+
+Provider inputs are published as Moonlight applications after the input directory connects.
+Each stream requires a successful Provider media negotiation.
+See [StreamHub integration](streamhub/README.md).
+
+### streamhub_codecs
+
+Explicit codecs verified for the configured Provider: `h264`, `hevc`, or
+`h264,hevc` (default). Only 8-bit SDR 4:2:0 is advertised. These startup
+capabilities do not bypass per-session negotiation or probe an encoder session.
+Restart Sunshine after changing this setting.
+
 ### min_log_level
 
 <table>

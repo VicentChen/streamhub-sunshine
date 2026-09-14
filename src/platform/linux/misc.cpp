@@ -474,7 +474,32 @@ namespace platf {
   /**
    * @brief Send multiple fixed-size UDP payload blocks using the platform backend.
    */
+  /**
+   * @brief Bound UDP backpressure even when cancellation arrives while the socket is full.
+   * @param fd Descriptor whose output buffer must become writable.
+   * @param deadline Absolute monotonic deadline shared by all retries of one send.
+   * @return True when writable; false on timeout or a closed/error descriptor.
+   */
+  bool wait_socket_writable(int fd, std::chrono::steady_clock::time_point deadline) {
+    for (;;) {
+      const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+      if (remaining.count() <= 0) {
+        return false;
+      }
+      pollfd descriptor {fd, POLLOUT, 0};
+      const int result = poll(&descriptor, 1, int(std::min<int64_t>(remaining.count(), 100)));
+      if (result > 0) {
+        return (descriptor.revents & POLLOUT) && !(descriptor.revents & (POLLERR | POLLHUP | POLLNVAL));
+      }
+      if (result < 0 && errno != EINTR) {
+        return false;
+      }
+    }
+  }
+
+  /** @brief Send a bounded batch, using GSO or sendmmsg where available. */
   bool send_batch(batched_send_info_t &send_info) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
     auto sockfd = (int) send_info.native_socket;
     struct msghdr msg = {};
 
@@ -608,18 +633,12 @@ namespace platf {
         // This will fail if GSO is not available, so we will fall back to non-GSO if
         // it's the first sendmsg() call. On subsequent calls, we will treat errors as
         // actual failures and return to the caller.
-        auto bytes_sent = sendmsg(sockfd, &msg, 0);
+        auto bytes_sent = sendmsg(sockfd, &msg, MSG_DONTWAIT);
         if (bytes_sent < 0) {
           // If there's no send buffer space, wait for some to be available
           if (errno == EAGAIN) {
-            struct pollfd pfd;
-
-            pfd.fd = sockfd;
-            pfd.events = POLLOUT;
-
-            if (poll(&pfd, 1, -1) != 1) {
-              BOOST_LOG(warning) << "poll() failed: "sv << errno;
-              break;
+            if (!wait_socket_writable(sockfd, deadline)) {
+              throw std::system_error(ETIMEDOUT, std::generic_category(), "UDP send deadline");
             }
 
             // Try to send again
@@ -670,18 +689,12 @@ namespace platf {
       // Call sendmmsg() until all messages are sent
       size_t blocks_sent = 0;
       while (blocks_sent < send_info.block_count) {
-        int msgs_sent = sendmmsg(sockfd, &msgs[blocks_sent], send_info.block_count - blocks_sent, 0);
+        int msgs_sent = sendmmsg(sockfd, &msgs[blocks_sent], send_info.block_count - blocks_sent, MSG_DONTWAIT);
         if (msgs_sent < 0) {
           // If there's no send buffer space, wait for some to be available
           if (errno == EAGAIN) {
-            struct pollfd pfd;
-
-            pfd.fd = sockfd;
-            pfd.events = POLLOUT;
-
-            if (poll(&pfd, 1, -1) != 1) {
-              BOOST_LOG(warning) << "poll() failed: "sv << errno;
-              break;
+            if (!wait_socket_writable(sockfd, deadline)) {
+              throw std::system_error(ETIMEDOUT, std::generic_category(), "UDP send deadline");
             }
 
             // Try to send again
@@ -703,6 +716,7 @@ namespace platf {
    * @brief Send the serialized response over the active socket.
    */
   bool send(send_info_t &send_info) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
     auto sockfd = (int) send_info.native_socket;
     struct msghdr msg = {};
 
@@ -794,22 +808,16 @@ namespace platf {
 
     msg.msg_controllen = cmbuflen;
 
-    auto bytes_sent = sendmsg(sockfd, &msg, 0);
+    auto bytes_sent = sendmsg(sockfd, &msg, MSG_DONTWAIT);
 
     // If there's no send buffer space, wait for some to be available
     while (bytes_sent < 0 && errno == EAGAIN) {
-      struct pollfd pfd;
-
-      pfd.fd = sockfd;
-      pfd.events = POLLOUT;
-
-      if (poll(&pfd, 1, -1) != 1) {
-        BOOST_LOG(warning) << "poll() failed: "sv << errno;
-        break;
+      if (!wait_socket_writable(sockfd, deadline)) {
+        throw std::system_error(ETIMEDOUT, std::generic_category(), "UDP send deadline");
       }
 
       // Try to send again
-      bytes_sent = sendmsg(sockfd, &msg, 0);
+      bytes_sent = sendmsg(sockfd, &msg, MSG_DONTWAIT);
     }
 
     if (bytes_sent < 0) {

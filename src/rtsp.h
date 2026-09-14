@@ -6,6 +6,8 @@
 
 // standard includes
 #include <atomic>
+#include <mutex>
+#include <stop_token>
 
 // local includes
 #include "crypto.h"
@@ -18,6 +20,12 @@ namespace rtsp_stream {
    * @brief RTSP launch session state shared with stream setup.
    */
   struct launch_session_t {
+    std::string input_id;  ///< Selected opaque Provider input, pinned for this launch.
+    bool resuming = false;  ///< Preserve selected application if a resume negotiation fails.
+    std::atomic_bool announcing {false};  ///< Reject duplicate ANNOUNCE for one launch.
+    std::stop_source cancel;  ///< Cancels an in-progress Provider handshake.
+    std::mutex lifecycle;  ///< Serializes final startup against application cancellation.
+    std::mutex reply_mutex;  ///< Serializes encrypted response counters.
     uint32_t id;  ///< RTSP launch-session identifier assigned before stream startup.
 
     crypto::aes_t gcm_key;  ///< AES-GCM key negotiated for encrypted RTSP messages.

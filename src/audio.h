@@ -75,10 +75,40 @@ namespace audio {
    * @brief Byte buffer used for encoded audio packet payloads.
    */
   using buffer_t = util::buffer_t<std::uint8_t>;
+  inline constexpr size_t max_packet_bytes = 8192;  ///< Bounds high-quality 7.1 Opus at 20 ms, including codec overhead.
+
   /**
    * @brief Encoded audio packet paired with platform channel metadata.
    */
-  using packet_t = std::pair<void *, buffer_t>;
+  struct packet_t {
+    void *first;  ///< Session routing pointer.
+    buffer_t second;  ///< Encoded Opus payload.
+    std::shared_ptr<void> lifetime;  ///< Session lifetime until network delivery finishes.
+    std::optional<uint32_t> timestamp;  ///< Source-derived RTP timestamp in milliseconds.
+
+    /** @brief Construct an encoded packet using the retained legacy arguments. */
+    packet_t(void *channel, buffer_t bytes):
+        first(channel),
+        second(std::move(bytes)) {}
+  };
+
+  /** @brief Session-owned Opus encoder; failures propagate only to its calling session. */
+  class pcm_encoder {
+  public:
+    /** @brief Construct an encoder matching the negotiated Moonlight layout. */
+    explicit pcm_encoder(config_t config);
+    /** @brief Release the native Opus encoder. */
+    ~pcm_encoder();
+    /** @brief Encode one complete interleaved PCM block. */
+    buffer_t encode(const std::vector<float> &samples);
+    /** @brief Resynchronize codec history after an explicit source discontinuity. */
+    void reset();
+
+  private:
+    struct state;
+    std::unique_ptr<state> state_;  ///< Private Opus state.
+  };
+
   /** @brief Queue of interleaved float PCM frames supplied to the Opus encoder. */
   using sample_queue_t = std::shared_ptr<safe::queue_t<std::vector<float>>>;
   /** @brief Encode PCM frames until the queue stops. */

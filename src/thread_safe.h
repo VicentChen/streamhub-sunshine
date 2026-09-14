@@ -167,6 +167,7 @@ namespace safe {
      * @return True when a value is available to inspect.
      */
     bool peek() {
+      std::lock_guard guard {_lock};
       return _continue && (bool) _status;
     }
 
@@ -198,6 +199,7 @@ namespace safe {
      * @return True while the queue accepts producers and consumers.
      */
     [[nodiscard]] bool running() const {
+      std::lock_guard guard {_lock};
       return _continue;
     }
 
@@ -206,7 +208,7 @@ namespace safe {
     status_t _status {util::false_v<status_t>};
 
     std::condition_variable _cv;
-    std::mutex _lock;
+    mutable std::mutex _lock;
   };
 
   /**
@@ -361,7 +363,7 @@ namespace safe {
     }
 
   private:
-    std::mutex _lock;
+    mutable std::mutex _lock;
     std::condition_variable _cv;
 
     status_t _status {util::false_v<status_t>};
@@ -427,11 +429,37 @@ namespace safe {
     }
 
     /**
+     * @brief Append only when space is available; failure leaves arguments untouched.
+     * @param args Values used to construct the queued item on success.
+     * @return True when ownership was transferred into the queue.
+     */
+    template<class... Args>
+    bool try_raise(Args &&...args) {
+      std::lock_guard guard {_lock};
+      if (!_continue || _queue.size() >= _max_elements) return false;
+      _queue.emplace_back(std::forward<Args>(args)...);
+      _cv.notify_all();
+      return true;
+    }
+
+    /**
+     * @brief Retire selected pending items, including their ownership callbacks.
+     * @param predicate Returns true for an item that should be removed.
+     */
+    template<class Predicate>
+    void discard_if(Predicate predicate) {
+      std::lock_guard guard {_lock};
+      std::erase_if(_queue, predicate);
+      _cv.notify_all();
+    }
+
+    /**
      * @brief Inspect the next queued value without popping it.
      *
      * @return True when a value is available to inspect.
      */
     bool peek() {
+      std::lock_guard guard {_lock};
       return _continue && !_queue.empty();
     }
 
@@ -513,6 +541,7 @@ namespace safe {
      * @return True while the queue accepts producers and consumers.
      */
     [[nodiscard]] bool running() const {
+      std::lock_guard guard {_lock};
       return _continue;
     }
 
@@ -520,7 +549,7 @@ namespace safe {
     bool _continue {true};
     std::uint32_t _max_elements;
 
-    std::mutex _lock;
+    mutable std::mutex _lock;
     std::condition_variable _cv;
 
     std::vector<T> _queue;
@@ -707,7 +736,7 @@ namespace safe {
     std::array<std::uint8_t, sizeof(element_type)> _object_buf;
 
     std::uint32_t _count;
-    std::mutex _lock;
+    mutable std::mutex _lock;
   };
 
   /**

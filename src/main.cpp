@@ -26,6 +26,9 @@
 #include "nvhttp.h"
 #include "process.h"
 #include "rtsp.h"
+#ifdef __linux__
+  #include "streamhub/catalog.h"
+#endif
 #include "upnp.h"
 #include "video.h"
 
@@ -329,6 +332,22 @@ int main(int argc, char *argv[]) {
     BOOST_LOG(error) << "Proc failed to initialize"sv;
   }
 
+#ifdef __linux__
+  auto provider_cleanup = util::fail_guard([] {
+    streamhub::inputs.reset();
+  });
+  if (!config::streamhub_socket.empty()) {
+    try {
+      streamhub::inputs = std::make_shared<streamhub::catalog>((platf::appdata() / "streamhub-input-ids").string());
+      streamhub::inputs->start(config::streamhub_socket);
+      video::codec_mode_flags = (config::streamhub_codecs.find("h264") != std::string::npos ? SCM_H264 : 0) |
+                                (config::streamhub_codecs.find("hevc") != std::string::npos ? SCM_HEVC : 0);
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "StreamHub directory unavailable: " << e.what();
+      streamhub::inputs.reset();
+    }
+  }
+#endif
   reed_solomon_init();
   if (http::init()) {
     BOOST_LOG(fatal) << "HTTP interface failed to initialize"sv;

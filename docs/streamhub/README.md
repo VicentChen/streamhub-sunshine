@@ -6,12 +6,15 @@
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
+| [protocol 接入计划](protocol-integration-plan.md) | Receiver 分步实现、每步交付物与短时验证 | 接线与客户端验证已完成，现场 HDMI 待验 |
+| [Receiver 接入](receiver-integration.md) | 使用、所有权、兼容组合和有限集成入口 | 已完成客户端验证；现场 HDMI 待验 |
+| [控制传输](control-transport.md) | protocol 构建依赖、socket 配置、IPC API 与隔离测试入口 | 已通过板端验证 |
 | [瘦身计划](slimming-plan.md) | 保留功能、删除对象、依赖清理和回归验证 | 已确定项完成 |
 | [托盘与 Qt 清理](slimming-tray.md) | 已删除内容、验证结果及当前验证环境 | 首批已实施 |
 | [应用执行裁剪](slimming-applications.md) | 本机命令、启动钩子及依赖删除，保留应用元数据与会话状态 | 第二批已验证 |
 | [媒体与设备后端裁剪](slimming-core.md) | 最终删除范围、保留依赖、规模对比和验证缺口 | 已验证 |
 
-专用构建、部署和测试入口尚未建立，后续随实现补充文档，不提前创建空文件或将计划写成已实现能力。
+构建、隔离测试、有限两进程启动和客户端验证入口见上表。
 
 ## 维护约定
 

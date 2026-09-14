@@ -36,6 +36,9 @@
 #include "utility.h"
 #include "uuid.h"
 #include "video.h"
+#ifdef __linux__
+  #include "streamhub/catalog.h"
+#endif
 
 using namespace std::literals;
 
@@ -1224,7 +1227,16 @@ namespace nvhttp {
 
     apps.put("<xmlattr>.status_code", 200);
 
-    for (auto &proc : proc::proc.get_apps()) {
+    auto selectable = proc::proc.get_apps();
+#ifdef __linux__
+    if (streamhub::inputs) {
+      selectable.clear();
+      for (const auto &entry : streamhub::inputs->entries()) {
+        selectable.push_back({entry.input.name, "", std::to_string(entry.app_id)});
+      }
+    }
+#endif
+    for (auto &proc : selectable) {
       pt::ptree app;
 
       app.put("IsHdrSupported"s, (video::codec_mode_flags & SCM_HEVC_MAIN10) ? 1 : 0);
@@ -1283,9 +1295,19 @@ namespace nvhttp {
 
     auto launch_session = make_launch_session(args);
 
-    if (!video::codec_mode_flags) {
+    std::string source_error = "No media source is connected";
+#ifdef __linux__
+    try {
+      if (streamhub::inputs) {
+        launch_session->input_id = streamhub::inputs->select(launch_session->appid);
+      }
+    } catch (const std::exception &e) {
+      source_error = e.what();
+    }
+#endif
+    if (!video::codec_mode_flags || launch_session->input_id.empty()) {
       tree.put("root.<xmlattr>.status_code", 503);
-      tree.put("root.<xmlattr>.status_message", "No media source is connected");
+      tree.put("root.<xmlattr>.status_message", source_error);
       tree.put("root.gamesession", 0);
       return;
     }
@@ -1326,7 +1348,7 @@ namespace nvhttp {
 
     rtsp_stream::launch_session_raise(launch_session);
 
-    // Stream was started successfully, we will revert the config when the app or session terminates
+    // Application selection is pending; media success is reported after RTSP negotiation.
   }
 
   /**
@@ -1373,10 +1395,22 @@ namespace nvhttp {
     }
 
     const auto launch_session = make_launch_session(args);
+    launch_session->appid = current_appid;
+    launch_session->resuming = true;
 
-    if (!video::codec_mode_flags) {
+    std::string source_error = "No media source is connected";
+#ifdef __linux__
+    try {
+      if (streamhub::inputs) {
+        launch_session->input_id = streamhub::inputs->select(launch_session->appid);
+      }
+    } catch (const std::exception &e) {
+      source_error = e.what();
+    }
+#endif
+    if (!video::codec_mode_flags || launch_session->input_id.empty()) {
       tree.put("root.<xmlattr>.status_code", 503);
-      tree.put("root.<xmlattr>.status_message", "No media source is connected");
+      tree.put("root.<xmlattr>.status_message", source_error);
       tree.put("root.resume", 0);
       return;
     }

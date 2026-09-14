@@ -60,6 +60,11 @@ namespace video {
      */
     virtual size_t data_size() = 0;
 
+    /** @brief Called after the packetizer has copied every source byte into its own storage. */
+    virtual void source_consumed() {}
+
+    std::shared_ptr<void> lifetime;  ///< Keeps session network state alive through packet delivery.
+    std::optional<std::chrono::steady_clock::time_point> presentation_time;  ///< Provider PTS, separate from capture latency.
     void *channel_data = nullptr;  ///< Platform or protocol state carried with this packet.
     bool after_ref_frame_invalidation = false;  ///< Whether the frame follows reference-frame invalidation.
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;  ///< Capture timestamp associated with the frame.

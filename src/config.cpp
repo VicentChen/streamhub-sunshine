@@ -43,6 +43,9 @@ const std::string APPS_JSON_PATH = platf::appdata().string() + "/apps.json";  //
 
 namespace config {
 
+  std::string streamhub_socket;
+  std::string streamhub_codecs = "h264,hevc";
+
   video_t video {0};
 
   stream_t stream {
@@ -651,6 +654,8 @@ namespace config {
     path_f(vars, "pkey", nvhttp.pkey);
     path_f(vars, "cert", nvhttp.cert);
     string_f(vars, "sunshine_name", nvhttp.sunshine_name);
+    string_f(vars, "streamhub_socket", streamhub_socket);
+    string_restricted_f(vars, "streamhub_codecs", streamhub_codecs, {"h264"sv, "hevc"sv, "h264,hevc"sv});
     path_f(vars, "log_path", config::sunshine.log_file);
     path_f(vars, "file_state", nvhttp.file_state);
 

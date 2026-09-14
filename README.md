@@ -6,13 +6,14 @@
 
 已完成计划中确定的功能裁剪：删除本机采集、视频编码、图像处理、显示管理、音频采集、虚拟输入、应用命令与托盘。保留 Moonlight 协议、网络传输、PCM→Opus、手柄解析及反馈。
 
-Receiver 尚未实现；当前没有媒体源连接，启动/恢复不会伪报串流成功。外部接入和真实串流验收仍是后续工作。没有新增分辨率、帧率、会话数或音频/手柄限制。构建、依赖和验证详情见 [完整裁剪记录](docs/streamhub/slimming-core.md)。
+已接通 protocol v0.2 输入目录、精确协商、资源状态机、视频 DMA-BUF、PCM→Opus 及基础手柄／振动。Mac Moonlight 已通过 H.264／HEVC 1080p60、三次恢复及 Provider 中断后重连测试；真实 HDMI 拔插仍待有信号的现场验收。使用、兼容组合和验证边界见 [Receiver 接入](docs/streamhub/receiver-integration.md)，构建依赖见 [控制传输](docs/streamhub/control-transport.md) 和 [裁剪记录](docs/streamhub/slimming-core.md)。
 
 ## 开发与文档入口
 
 - [开发规范](AGENTS.md)：本 fork 的职责与开发要求。
 - [StreamHub 改造文档](docs/streamhub/README.md)：计划与后续模块说明的统一入口。
 - [瘦身计划](docs/streamhub/slimming-plan.md)：功能取舍、删除顺序与回归验证。
+- [protocol 接入计划](docs/streamhub/protocol-integration-plan.md)：Receiver 的分步实现、交付物与短时验证。
 - [产品架构](../docs/architecture.md)：进程与模块边界。
 - [公共协议](../protocol/README.md)：两端通信规范和基础组件。
 - [独立 StreamHub 软件](../streamhub/README.md)：Provider 当前实现与使用入口。

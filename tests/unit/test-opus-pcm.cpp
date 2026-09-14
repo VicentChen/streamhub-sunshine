@@ -43,3 +43,71 @@ TEST(OpusPcmTest, RoundTripsSuppliedStereoPcm) {
   std::vector<float> decoded(480);
   EXPECT_EQ(opus_multistream_decode_float(decoder, packet->second.begin(), packet->second.size(), decoded.data(), 240, 0), 240);
 }
+
+TEST(OpusPcmTest, PreservesEveryChannelAtSupportedPacketDurations) {
+  for (int channels : {2, 6, 8}) {
+    for (int ms : {5, 10, 20}) {
+      audio::config_t config {};
+      config.channels = channels;
+      config.packetDuration = ms;
+      config.flags[audio::config_t::HIGH_QUALITY] = true;
+      audio::pcm_encoder encoder(config);
+      unsigned char mapping[] {0, 1, 2, 3, 4, 5, 6, 7};
+      int error = 0;
+      // High-quality stereo uses one coupled stream; surround uses independent streams.
+      int streams = channels == 2 ? 1 : channels, coupled = channels == 2 ? 1 : 0;
+      auto *decoder = opus_multistream_decoder_create(48000, channels, streams, coupled, mapping, &error);
+      ASSERT_EQ(error, OPUS_OK);
+      auto cleanup = util::fail_guard([&] {
+        opus_multistream_decoder_destroy(decoder);
+      });
+      int frames = ms * 48;
+      std::vector<float> pcm(frames * channels), decoded(frames * channels);
+      std::vector<double> energy(channels);
+      // Excite one physical channel at a time. Warm past Opus's algorithmic delay.
+      for (int active = 0; active < channels; ++active) {
+        encoder.reset();
+        opus_multistream_decoder_ctl(decoder, OPUS_RESET_STATE);
+        std::fill(energy.begin(), energy.end(), 0);
+        for (int block = 0; block < 5; ++block) {
+          std::fill(pcm.begin(), pcm.end(), 0);
+          for (int i = 0; i < frames; ++i) {
+            pcm[i * channels + active] = 0.25f * std::sin((block * frames + i) * 0.12f);
+          }
+          auto packet = encoder.encode(pcm);
+          ASSERT_EQ(opus_multistream_decode_float(decoder, packet.begin(), packet.size(), decoded.data(), frames, 0), frames);
+          if (block >= 2) {
+            for (int i = 0; i < frames; ++i) {
+              for (int ch = 0; ch < channels; ++ch) {
+                energy[ch] += decoded[i * channels + ch] * decoded[i * channels + ch];
+              }
+            }
+          }
+        }
+        EXPECT_GT(energy[active], 0.1);
+        for (int ch = 0; ch < channels; ++ch) {
+          if (ch != active) {
+            EXPECT_LT(energy[ch], energy[active] * 0.01 + 0.0001);
+          }
+        }
+      }
+      EXPECT_THROW(encoder.encode(std::vector<float>(1)), std::invalid_argument);
+    }
+  }
+}
+
+TEST(OpusPcmTest, EncoderFailureDoesNotStopAnotherSessionsQueue) {
+  auto previous = mail::man;
+  mail::man = std::make_shared<safe::mail_raw_t>();
+  auto cleanup = util::fail_guard([&] {
+    mail::man = previous;
+  });
+  auto packets = mail::man->queue<audio::packet_t>(mail::audio_packets);
+  auto samples = std::make_shared<safe::queue_t<std::vector<float>>>();
+  samples->raise(std::vector<float>(1));
+  audio::config_t config {};
+  config.channels = 2;
+  config.packetDuration = 5;
+  audio::encodeThread(samples, config, nullptr);
+  EXPECT_TRUE(packets->running());
+}

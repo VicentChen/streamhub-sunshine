@@ -104,55 +104,63 @@ namespace audio {
    */
   void encodeThread(sample_queue_t samples, config_t config, void *channel_data) {
     auto packets = mail::man->queue<packet_t>(mail::audio_packets);
+    try {
+      pcm_encoder encoder(config);
+      while (auto sample = samples->pop()) {
+        packets->raise(channel_data, encoder.encode(*sample));
+      }
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Opus session failed: " << e.what();
+    }
+  }
+
+  /** @brief Native state for one negotiated PCM encoder. */
+  struct pcm_encoder::state {
+    opus_t opus;  ///< Native codec.
+    size_t samples;  ///< Scalar samples per block.
+    int frames;  ///< Per-channel frames per block.
+  };
+
+  pcm_encoder::pcm_encoder(config_t config):
+      state_(std::make_unique<state>()) {
     auto stream = stream_configs[map_stream(config.channels, config.flags[config_t::HIGH_QUALITY])];
     if (config.flags[config_t::CUSTOM_SURROUND_PARAMS]) {
       apply_surround_params(stream, config.customStreamParams);
     }
-
-    // Encoding takes place on this thread
-    platf::set_thread_name("audio::encode");
-    platf::adjust_thread_priority(platf::thread_priority_e::high);
-
-    opus_t opus {opus_multistream_encoder_create(
-      stream.sampleRate,
-      stream.channelCount,
-      stream.streams,
-      stream.coupledStreams,
-      stream.mapping,
-      OPUS_APPLICATION_RESTRICTED_LOWDELAY,
-      nullptr
-    )};
-
-    if (!opus) {
-      BOOST_LOG(error) << "Could not initialize Opus";
-      return;
+    state_->frames = config.packetDuration * stream.sampleRate / 1000;
+    state_->samples = size_t(state_->frames) * stream.channelCount;
+    if (state_->frames <= 0 || (stream.channelCount != 2 && stream.channelCount != 6 && stream.channelCount != 8)) {
+      throw std::invalid_argument("invalid Opus block or channels");
     }
-    opus_multistream_encoder_ctl(opus.get(), OPUS_SET_BITRATE(stream.bitrate));
-    opus_multistream_encoder_ctl(opus.get(), OPUS_SET_VBR(0));
-
-    BOOST_LOG(info) << "Opus initialized: "sv << stream.sampleRate / 1000 << " kHz, "sv
-                    << stream.channelCount << " channels, "sv
-                    << stream.bitrate / 1000 << " kbps (total), LOWDELAY"sv;
-
-    auto frame_size = config.packetDuration * stream.sampleRate / 1000;
-    while (auto sample = samples->pop()) {
-      if (frame_size <= 0 || sample->size() != static_cast<std::size_t>(frame_size) * stream.channelCount) {
-        BOOST_LOG(error) << "PCM frame size does not match the negotiated audio format";
-        return;
-      }
-      buffer_t packet {1400};
-
-      int bytes = opus_multistream_encode_float(opus.get(), sample->data(), frame_size, std::begin(packet), (opus_int32) packet.size());
-      if (bytes < 0) {
-        BOOST_LOG(error) << "Couldn't encode audio: "sv << opus_strerror(bytes);
-        packets->stop();
-
-        return;
-      }
-
-      packet.fake_resize(bytes);
-      packets->raise(channel_data, std::move(packet));
+    int error = OPUS_OK;
+    state_->opus = opus_t(opus_multistream_encoder_create(stream.sampleRate, stream.channelCount, stream.streams, stream.coupledStreams, stream.mapping, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &error));
+    if (!state_->opus || error != OPUS_OK) {
+      throw std::runtime_error("could not initialize Opus");
     }
+    if (opus_multistream_encoder_ctl(state_->opus.get(), OPUS_SET_BITRATE(stream.bitrate)) != OPUS_OK || opus_multistream_encoder_ctl(state_->opus.get(), OPUS_SET_VBR(0)) != OPUS_OK) {
+      throw std::runtime_error("could not configure Opus");
+    }
+  }
+
+  pcm_encoder::~pcm_encoder() = default;
+
+  void pcm_encoder::reset() {
+    if (opus_multistream_encoder_ctl(state_->opus.get(), OPUS_RESET_STATE) != OPUS_OK) {
+      throw std::runtime_error("could not reset Opus");
+    }
+  }
+
+  buffer_t pcm_encoder::encode(const std::vector<float> &samples) {
+    if (samples.size() != state_->samples) {
+      throw std::invalid_argument("PCM block does not match Opus layout");
+    }
+    buffer_t packet {max_packet_bytes};
+    auto bytes = opus_multistream_encode_float(state_->opus.get(), samples.data(), state_->frames, packet.begin(), packet.size());
+    if (bytes < 0) {
+      throw std::runtime_error(opus_strerror(bytes));
+    }
+    packet.fake_resize(bytes);
+    return packet;
   }
 
   /**

@@ -38,6 +38,7 @@ namespace input {
   /** @brief Controller messages belonging to one transport session. */
   struct input_t {
     safe::mail_raw_t::queue_t<gamepad_event_t> events;
+    std::atomic_bool overflow {false};  ///< A full local queue explicitly fails this session.
   };
 
   /** @brief Allocate session-local protocol state without opening host devices. */

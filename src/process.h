@@ -4,13 +4,15 @@
  */
 #pragma once
 
+#include "platform/common.h"
+#include "utility.h"
+
+#include <atomic>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
-#include "platform/common.h"
-#include "utility.h"
 
 /**
  * @def DEFAULT_APP_IMAGE_PATH
@@ -61,7 +63,7 @@ namespace proc {
     void terminate();
 
   private:
-    int _app_id {0};  ///< Active protocol application ID.
+    std::shared_ptr<std::atomic<int>> _app_id = std::make_shared<std::atomic<int>>(0);  ///< Active protocol application ID.
     std::vector<ctx_t> _apps;  ///< Configured application metadata.
   };
 

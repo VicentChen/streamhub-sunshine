@@ -68,6 +68,8 @@ namespace stream {
      * @return Start status.
      */
     int start(session_t &session, const std::string &addr_string);
+    /** @brief Complete a cancellable Provider handshake before starting any network media workers. */
+    int prepare(session_t &session, rtsp_stream::launch_session_t &launch);
     /**
      * @brief Stop a streaming session and prevent more packets from being queued.
      *
