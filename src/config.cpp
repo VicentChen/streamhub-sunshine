@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -36,7 +37,7 @@
 namespace fs = std::filesystem;
 using namespace std::literals;
 
-constexpr auto CA_DIR = "credentials";  ///< Subdirectory under app data that stores Sunshine credentials.
+constexpr auto CA_DIR = "../../data/sunshine/credentials";  ///< Appdata-relative location of product-owned Sunshine credentials.
 const std::string PRIVATE_KEY_FILE = std::string(CA_DIR) + "/cakey.pem";  ///< Relative path to the persisted private key PEM file.
 const std::string CERTIFICATE_FILE = std::string(CA_DIR) + "/cacert.pem";  ///< Relative path to the persisted certificate PEM file.
 const std::string APPS_JSON_PATH = platf::appdata().string() + "/apps.json";  ///< Default path to the applications JSON file.
@@ -70,7 +71,7 @@ namespace config {
     CERTIFICATE_FILE,
 
     platf::get_host_name(),  // sunshine_name,
-    "sunshine_state.json"s,  // file_state
+    "../../data/sunshine/state.json"s,  // file_state
     {},  // external_ip
   };
 
@@ -94,7 +95,7 @@ namespace config {
     47989,  // Base port number
     "ipv4",  // Address family
     {},  // Bind address
-    platf::appdata().string() + "/sunshine.log",  // log file
+    platf::appdata().string() + "/../../logs/sunshine.log",  // log file
     false,  // notify_pre_releases
   };
 
@@ -334,6 +335,26 @@ namespace config {
   }
 
   /**
+   * @brief Reject writable paths outside product var, including symlink escapes.
+   * @param input Absolute or appdata-relative output path.
+   * @return Canonical output path below the product writable directory.
+   */
+  fs::path product_path(const fs::path &input) {
+    const char *root = std::getenv("STREAMHUB_ROOT");
+    if (!root || !*root || !fs::path(root).is_absolute() || fs::path(root) == "/") {
+      throw fs::filesystem_error("STREAMHUB_ROOT is required", input, std::make_error_code(std::errc::permission_denied));
+    }
+    const auto base = fs::weakly_canonical(fs::path(root));
+    const auto var = base / "var";
+    const auto path = fs::weakly_canonical(input.is_absolute() ? input : platf::appdata() / input);
+    const auto relative = path.lexically_relative(var);
+    if (relative.empty() || relative == "." || *relative.begin() == "..") {
+      throw fs::filesystem_error("output must remain below STREAMHUB_ROOT/var", path, std::make_error_code(std::errc::permission_denied));
+    }
+    return path;
+  }
+
+  /**
    * @brief Consume a path setting and normalize it under the app data directory when relative.
    *
    * @param vars Parsed configuration entries; consumed keys are erased.
@@ -354,6 +375,8 @@ namespace config {
     if (input.is_relative()) {
       input = appdata / input;
     }
+
+    input = product_path(input);
 
     auto dir = input;
     dir.remove_filename();
@@ -880,6 +903,8 @@ namespace config {
 
     bool config_loaded = false;
     try {
+      sunshine.config_file = product_path(sunshine.config_file).string();
+      product_path(platf::appdata());
       // Create appdata folder if it does not exist
       file_handler::make_directory(platf::appdata().string());
 

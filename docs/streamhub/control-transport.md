@@ -1,5 +1,7 @@
 # Control transport 接入
 
+> 当前运行、构建和测试必须遵守[产品写入限制](../../../docs/storage.md)，通过总仓库 tools/run.py 入口执行。下方历史验证路径保留当时记录，不再作为当前外部目录写入授权。有限集成 --state 改为产品根目录 var/tests/ 下的独立目录。
+
 本文说明控制传输层；完整输入目录、协商、资源状态机和媒体接线已实现，使用及最终验证见 [Receiver 接入](receiver-integration.md)。
 
 ## 构建与依赖

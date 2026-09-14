@@ -3,6 +3,19 @@ cmake_minimum_required(VERSION 3.24)
 # `cmake_path(CONVERT ... TO_NATIVE_PATH_LIST ...)` requires 3.20
 # todo - set this conditionally
 
+
+# Product builds must not create artifacts outside the product checkout.
+if(DEFINED ENV{STREAMHUB_ROOT})
+  file(REAL_PATH "$ENV{STREAMHUB_ROOT}" STREAMHUB_PRODUCT_ROOT)
+else()
+  file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/.." STREAMHUB_PRODUCT_ROOT)
+endif()
+file(REAL_PATH "${CMAKE_BINARY_DIR}" STREAMHUB_BUILD_ROOT)
+cmake_path(IS_PREFIX STREAMHUB_PRODUCT_ROOT "${STREAMHUB_BUILD_ROOT}" NORMALIZE STREAMHUB_BUILD_INSIDE)
+if(STREAMHUB_PRODUCT_ROOT STREQUAL "/" OR NOT STREAMHUB_BUILD_INSIDE OR STREAMHUB_BUILD_ROOT STREQUAL STREAMHUB_PRODUCT_ROOT)
+  message(FATAL_ERROR "Build output must be below the StreamHub product root")
+endif()
+
 project(Sunshine VERSION 0.0.0
         DESCRIPTION "Self-hosted game stream host for Moonlight"
         HOMEPAGE_URL "https://app.lizardbyte.dev/Sunshine")

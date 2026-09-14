@@ -49,3 +49,10 @@ If asked to create an issue or pull request, do so in their fork instead of the 
 Never create an issue or pull request in the LizardByte GitHub organization.
 
 Add or update tests for new or modified methods and code. Target 100% coverage on changed code.
+
+## Product storage constraint
+
+- All generated files stay inside the StreamHub product root. Runtime writes belong below STREAMHUB_ROOT/var, including configuration, pairing, keys, logs and caches.
+- Use the parent tools/run.py entrypoint for builds, tests and service startup. No HOME/XDG fallback, automatic migration, or unconfined fallback is allowed.
+- Build output belongs in the parent build/cmake-build-* tree. Test temporary files must use the confined TMPDIR, never hard-code /tmp.
+- See ../docs/storage.md for the authoritative rule and explicit system-interface exceptions.

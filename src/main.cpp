@@ -166,13 +166,15 @@ int main(int argc, char *argv[]) {
   mail::man = std::make_shared<safe::mail_raw_t>();
 
   // parse config file
-  if (config::parse(argc, argv)) {
-    return 0;
+  const int config_result = config::parse(argc, argv);
+  if (config_result != 0) {
+    return config_result > 0 ? 0 : 1;
   }
 
   auto log_deinit_guard = logging::init(config::sunshine.min_log_level, config::sunshine.log_file);
   if (!log_deinit_guard) {
     BOOST_LOG(error) << "Logging failed to initialize"sv;
+    return 1;
   }
 
   // logging can begin at this point

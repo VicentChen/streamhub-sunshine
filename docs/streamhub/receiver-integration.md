@@ -1,5 +1,7 @@
 # Receiver 接入与短时验证
 
+> 当前运行、构建和测试必须遵守[产品写入限制](../../../docs/storage.md)，通过总仓库 tools/run.py 入口执行。下方历史验证路径保留当时记录，不再作为当前外部目录写入授权。有限集成 --state 改为产品根目录 var/tests/ 下的独立目录。
+
 Sunshine 已接通 protocol v0.2 输入目录、精确协商、资源握手、视频、PCM→Opus 和基础手柄／振动桥接。适配源码集中在 `src/streamhub/`，只依赖公共 MIT protocol；独立 Provider 仍负责采集、RGA 和 MPP。
 
 ## 使用

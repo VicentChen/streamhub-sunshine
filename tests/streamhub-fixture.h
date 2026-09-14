@@ -118,8 +118,8 @@ namespace streamhub_test {
   public:
     /** @brief Bind an isolated socket and start one bounded test exchange. */
     explicit provider(std::function<void(int)> work) {
-      char name[] = "/tmp/sunshine-session-XXXXXX";
-      auto *d = mkdtemp(name);
+      std::string name = (std::filesystem::temp_directory_path() / "p-XXXXXX").string();
+      auto *d = mkdtemp(name.data());
       check(d);
       directory = d;
       path = directory + "/control.sock";
@@ -127,6 +127,7 @@ namespace streamhub_test {
       check(listener.get() >= 0);
       sockaddr_un address {};
       address.sun_family = AF_UNIX;
+      check(path.size() < sizeof(address.sun_path));
       std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
       check(bind(listener.get(), reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0);
       check(listen(listener.get(), 8) == 0);

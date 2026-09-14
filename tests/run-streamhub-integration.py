@@ -4,6 +4,9 @@ No existing services, configuration, or pairing database are modified. Runtime
 files/logs stay in --state for inspection. SIGINT/SIGTERM and the time limit stop
 both child processes. Use --source hdmi only with the explicitly selected device.
 """
+import os
+if not os.environ.get("STREAMHUB_ROOT"):
+    raise SystemExit("start this test with tools/run.py --development --")
 import argparse
 import json
 import os
@@ -28,6 +31,9 @@ args = parser.parse_args()
 if not 1 <= args.seconds <= 1800 or not 1024 <= args.port <= 65514:
     parser.error("seconds must be 1..1800 and port 1024..65514")
 state = args.state.resolve()
+base = Path(os.environ["STREAMHUB_ROOT"]).resolve() / "var"
+if not state.is_relative_to(base) or state == base:
+    parser.error("--state must be below STREAMHUB_ROOT/var")
 if args.reuse_state:
     if not (state / "integration-state").is_file():
         parser.error("--reuse-state requires this runner's marker")
@@ -64,6 +70,7 @@ configuration.write_text("\n".join([
     f"port = {args.port}", "sunshine_name = StreamHub acceptance",
     f"file_apps = {state / 'apps.json'}", f"file_state = {state / 'sunshine-state.json'}",
     f"credentials_file = {state / 'web-credentials.json'}",
+    f"pkey = {state / 'cakey.pem'}", f"cert = {state / 'cacert.pem'}",
     f"log_path = {state / 'sunshine.log'}", "min_log_level = 1", "upnp = disabled",
 ]) + "\n")
 password = json.loads((state / "web-auth.json").read_text())["password"] if args.reuse_state else secrets.token_urlsafe(24)

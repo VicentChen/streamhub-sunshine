@@ -1,4 +1,7 @@
 """Run bounded StreamHub transport and retained regressions with isolated user state."""
+import os
+if not os.environ.get("STREAMHUB_ROOT"):
+    raise SystemExit("start this test with tools/run.py --development --")
 import argparse
 import os
 from pathlib import Path
@@ -19,13 +22,15 @@ if args.regression:
                "ConfigConsistencyTest.*", "LocaleConsistencyTest.*",
                "GamepadProtocolTest.*", "OpusPcmTest.*", "ProcessPNGTest.*",
                "ConfigHttpTest.ApplicationMetadataOmitsExecutionSettings"]
-with tempfile.TemporaryDirectory(prefix="sunshine-protocol-") as directory:
+with tempfile.TemporaryDirectory(prefix="s-") as directory:
+    temporary = Path(directory) / "var/t"
+    temporary.mkdir(parents=True)
     env = os.environ.copy()
     if args.runtime_library_path:
         env["LD_LIBRARY_PATH"] = args.runtime_library_path
     for key in ("CONFIGURATION_DIRECTORY", "DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS"):
         env.pop(key, None)
-    env.update(HOME=directory, TMPDIR=directory, XDG_CONFIG_HOME=directory,
+    env.update(STREAMHUB_ROOT=directory, HOME=directory, TMPDIR=str(temporary), XDG_CONFIG_HOME=directory,
                GCOV_PREFIX=directory, GCOV_PREFIX_STRIP="0")
     result = subprocess.run(
         [str(build / "tests/test_sunshine"), "--gtest_filter=" + ":".join(suites),

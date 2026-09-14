@@ -42,8 +42,8 @@ namespace {
 
     /** @brief Bind an isolated Provider endpoint. */
     void SetUp() override {
-      char temp[] = "/tmp/sunshine-transport-XXXXXX";
-      auto *result = mkdtemp(temp);
+      std::string temp = (std::filesystem::temp_directory_path() / "t-XXXXXX").string();
+      auto *result = mkdtemp(temp.data());
       ASSERT_NE(result, nullptr);
       directory = result;
       path = directory + "/control.sock";
@@ -51,6 +51,7 @@ namespace {
       ASSERT_GE(listener.get(), 0);
       sockaddr_un address {};
       address.sun_family = AF_UNIX;
+      ASSERT_LT(path.size(), sizeof(address.sun_path));
       std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
       ASSERT_EQ(bind(listener.get(), reinterpret_cast<sockaddr *>(&address), sizeof(address)), 0);
       ASSERT_EQ(listen(listener.get(), 8), 0);
@@ -255,8 +256,8 @@ namespace {
     auto original_settings = config::modified_config_settings;
     auto apps = directory + "/apps.json";
     std::ofstream(apps) << "{\"apps\": []}";
-    EXPECT_NO_THROW(config::apply_config_for_test("streamhub_socket = /tmp/provider/control.sock\nfile_apps = " + apps + "\n"));
-    EXPECT_EQ(config::streamhub_socket, "/tmp/provider/control.sock");
+    EXPECT_NO_THROW(config::apply_config_for_test("streamhub_socket = " + path + "\nfile_apps = " + apps + "\n"));
+    EXPECT_EQ(config::streamhub_socket, path);
     config::streamhub_socket = original;
     config::stream.file_apps = original_apps;
     config::modified_config_settings = std::move(original_settings);
