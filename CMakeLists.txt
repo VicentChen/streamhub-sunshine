@@ -16,6 +16,11 @@ if(STREAMHUB_PRODUCT_ROOT STREQUAL "/" OR NOT STREAMHUB_BUILD_INSIDE OR STREAMHU
   message(FATAL_ERROR "Build output must be below the StreamHub product root")
 endif()
 
+# All development entrypoints must use the same module output as the services.
+if(NOT STREAMHUB_BUILD_ROOT STREQUAL "${STREAMHUB_PRODUCT_ROOT}/build/cmake-build-sunshine")
+  message(FATAL_ERROR "Use the fixed module build directory: ${STREAMHUB_PRODUCT_ROOT}/build/cmake-build-sunshine; run ./build.sh sunshine")
+endif()
+
 project(Sunshine VERSION 0.0.0
         DESCRIPTION "Self-hosted game stream host for Moonlight"
         HOMEPAGE_URL "https://app.lizardbyte.dev/Sunshine")

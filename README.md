@@ -8,6 +8,10 @@
 
 已接通 protocol v0.4 输入目录、精确协商、资源状态机、视频 DMA-BUF、PCM→Opus 及基础手柄／振动。独立 Provider 已接收基础手柄并默认交给显示中的 UI，当前反馈能力为零；见 [Provider 手柄输入](../streamhub/docs/gamepad.md)。Mac Moonlight 已通过 H.264／HEVC 1080p60、三次恢复及 Provider 中断后重连测试；真实 HDMI 拔插仍待有信号的现场验收。使用、兼容组合和验证边界见 [Receiver 接入](docs/streamhub/receiver-integration.md)，构建依赖见 [控制传输](docs/streamhub/control-transport.md) 和 [裁剪记录](docs/streamhub/slimming-core.md)。
 
+## 构建
+
+从总仓库运行 `./build.sh sunshine`，固定输出到 `build/cmake-build-sunshine`，包含测试与 Web assets；开发服务使用该目录的 sunshine。构建后通过 `./start.sh --restart` 切换运行程序，构建本身不重启服务。目录与隔离规则见 [产品目录](../docs/storage.md)。
+
 ## 开发与文档入口
 
 - [开发规范](AGENTS.md)：本 fork 的职责与开发要求。
