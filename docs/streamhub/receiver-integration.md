@@ -2,7 +2,7 @@
 
 > 当前运行、构建和测试必须遵守[产品写入限制](../../../docs/storage.md)，通过总仓库 tools/run.py 入口执行。下方历史验证路径保留当时记录，不再作为当前外部目录写入授权。有限集成 --state 改为产品根目录 var/tests/ 下的独立目录。
 
-Sunshine 已接通 protocol v0.3 输入目录、精确协商、资源握手、视频、PCM→Opus 和基础手柄／振动桥接。适配源码集中在 `src/streamhub/`，只依赖公共 MIT protocol；独立 Provider 仍负责采集、RGA 和 MPP。
+Sunshine 已接通 protocol v0.4 输入目录、精确协商、资源握手、视频、PCM→Opus 和基础手柄／振动桥接。适配源码集中在 `src/streamhub/`，只依赖公共 MIT protocol；独立 Provider 仍负责采集、RGA 和 MPP。
 
 ## 使用
 
@@ -13,7 +13,7 @@ streamhub_socket = /absolute/product/root/var/run/control.sock
 streamhub_codecs = h264,hevc
 ```
 
-socket 必须为绝对路径，两进程 UID 相同。配置也在 Web General 页提供，重启 Sunshine 后生效。`streamhub_codecs` 可为 `h264`、`hevc` 或 `h264,hevc`。v0.3 没有能力查询，因此它是管理员显式设置的接入能力；不会通过占用编码器探测。最终每次 ANNOUNCE 仍逐项协商，拒绝不满足的参数。
+socket 必须为绝对路径，两进程 UID 相同。配置也在 Web General 页提供，重启 Sunshine 后生效。`streamhub_codecs` 可为 `h264`、`hevc` 或 `h264,hevc`。v0.4 没有能力查询，因此它是管理员显式设置的接入能力；不会通过占用编码器探测。最终每次 ANNOUNCE 仍逐项协商，拒绝不满足的参数。
 
 输入列表成为 Moonlight 的应用列表。应用 ID 来自不透明 input_id 的持久映射，注册表 `streamhub-input-ids` 存在 Sunshine 应用数据目录。重排、改名和删除后恢复不会改变同一来源的 ID；碰撞通过持久分配解决。原 apps.json 不被目录刷新重写；Provider 输入使用默认图标，不借用同号旧应用的元数据。离线时保留配对、管理和最近目录，启动明确失败；输入存在但无信号时仍允许 Provider 决定是否接受。
 
@@ -30,7 +30,7 @@ socket 必须为绝对路径，两进程 UID 相同。配置也在 Web General �
 
 Mac Moonlight 6.1.0 的默认请求是 BT.601 limited。本次在独立 Provider 中增加实际 MPP BT.601 RGB 转换及 SPS/VUI 校验。原生 BT.709 NV12 需要该输出时，先由 RGA 按 BT.709 转 BGR，再由 MPP 按 BT.601 转换；没有在 Receiver 修改请求或仅改色彩标签。BT.709 NV12 可继续直入 MPP；尺寸／对齐不足时仍由 RGA 处理。
 
-不声明 AV1、HDR、4:4:4、RFI 或未实现的触摸／运动扩展。超过 Provider 当前能力的完整请求明确失败，包括 full range、超过 codec 能力的 slice 数下限和过大尺寸。控制协议为 v0.3，两端需同步更新；多 slice 仍是一个完整帧，而非多个网络帧。
+不声明 AV1、HDR、4:4:4、RFI 或未实现的触摸／运动扩展。超过 Provider 当前能力的完整请求明确失败，包括 full range、超过 codec 能力的 slice 数下限和过大尺寸。控制协议为 v0.4，两端需同步更新；多 slice 仍是一个完整帧，而非多个网络帧。
 
 ## 会话和所有权
 
@@ -146,3 +146,7 @@ Sunshine Linux Avahi 发布现在将这条共享 PTR 与串流服务放入同一
 独立 Provider 已消费基础连接／状态／断开事件，并实现默认 UI 输入归属。以上 2026-09-14 验证表中的零能力是历史状态；当前能力与测试边界见 [Provider 手柄输入](../../../streamhub/docs/gamepad.md)。
 
 新增 tests/streamhub-gamepad-smoke.cpp 使用本 fork 的生产 gamepad_bridge 与 Receiver 向真实 Provider 发出 Moonlight 格式输入，覆盖媒体队列满时的短按与断开。完整 Sunshine 测试构建也提供 streamhub-gamepad-smoke 目标；独立适配构建位于 tests/streamhub-adapter，构建、测试与双进程复现命令见上方 Provider 文档。独立目标不链接 Provider 实现，只通过 protocol 通信。
+
+## 通知等待
+
+协议 v0.4／布局 2 的媒体与手柄队列通过共享 futex 通知数据到达和空间归还，不能与旧 Provider 混用。视频异步读完成后通知原消费者，消费者执行 READ END 后 dequeue；取消后的清理仍等待实际读完成。网络发送队列通过条件变量归还空间，IDR／失效请求唤醒正在等待媒体或网络空间的线程。控制 worker 同时等待控制 socket、本地输入、反馈和输入空间通知，保留 IDR 受理与积压的截止时间；通知观察线程只读取通知版本，不参与 SPSC 队列所有权。会话状态与网络引用清理使用原子通知。网络带宽 pacing、超时和重试仍使用真实截止时间。

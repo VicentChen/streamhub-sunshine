@@ -84,6 +84,7 @@ namespace input {
       if (auto event = decode(bytes)) {
         if (!input->events->try_raise(std::move(*event))) {
           input->overflow.store(true);
+          input->events->wake();
         }
       }
     }

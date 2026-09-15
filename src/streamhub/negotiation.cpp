@@ -56,7 +56,7 @@ namespace streamhub {
                                                                                                                                   p::audio_channel_layout::surround_7_1},
                     uint32_t(c.packet_ms) * 48};
     result.gamepad = {16, p::gamepad_input_features::basic_state, p::gamepad_feedback_features::rumble};
-    result.queue_layout = p::queue_layout_v1;
+    result.queue_layout = p::queue_layout_v2;
     result.max_shared_bytes = 96ULL * 1024 * 1024;
     std::vector<std::byte> bytes;
     require(p::encode_control({{p::protocol_major, p::protocol_minor, p::control_message_type::connect_request, 0, 0, 1, 0}, result}, bytes) == p::control_error::none, "StreamHub: invalid protocol request");
@@ -66,7 +66,7 @@ namespace streamhub {
   void validate_accept(const protocal::connect_request_info &r, const protocal::connect_accept_info &a) {
     require(fields(r.video.format) == fields(a.video.format) && r.video.bitrate_bps == a.video.bitrate_bps && r.video.slices_per_frame && a.video.slices_per_frame >= r.video.slices_per_frame && (!r.video.max_level || a.video.level <= r.video.max_level) && a.video.ref_frames && (!r.video.max_ref_frames || a.video.ref_frames <= r.video.max_ref_frames), "StreamHub: ACCEPT changed video requirements");
     require(r.audio.format.sample_format == a.audio.format.sample_format && r.audio.format.sample_rate == a.audio.format.sample_rate && r.audio.format.channel_layout == a.audio.format.channel_layout && r.audio.block_frames == a.audio.block_frames, "StreamHub: ACCEPT changed PCM requirements");
-    require(r.queue_layout == a.queue_layout && a.queue_layout == protocal::queue_layout_v1, "StreamHub: incompatible queue ABI");
+    require(r.queue_layout == a.queue_layout && a.queue_layout == protocal::queue_layout_v2, "StreamHub: incompatible queue ABI");
     require(a.gamepad.max_controllers <= r.gamepad.max_controllers && !(a.gamepad.input_features & ~r.gamepad.input_features) && !(a.gamepad.feedback_features & ~r.gamepad.feedback_features), "StreamHub: ACCEPT exceeds requested gamepad capabilities");
   }
 }  // namespace streamhub

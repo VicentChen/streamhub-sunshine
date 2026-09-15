@@ -40,6 +40,26 @@ namespace streamhub {
       return pending_.size() < 32;
     }
 
+    /** @brief Whether feedback remains to be consumed on the original worker. */
+    bool feedback_ready() const {
+      return !feedback_.empty();
+    }
+
+    /** @brief Observe queue-space changes without becoming a second producer. */
+    protocal::shared_event &input_notification() {
+      return input_.notification();
+    }
+
+    /** @brief Observe feedback readiness without advancing the consumer. */
+    protocal::shared_event &feedback_notification() {
+      return feedback_.notification();
+    }
+
+    /** @brief Deadline for the existing bounded controller backlog. */
+    transport::deadline next_deadline() const {
+      return blocked_ ? *blocked_ + std::chrono::seconds(1) : transport::deadline::max();
+    }
+
     /** @brief Translate physical button positions explicitly. */
     static uint32_t buttons(uint32_t moonlight);
 

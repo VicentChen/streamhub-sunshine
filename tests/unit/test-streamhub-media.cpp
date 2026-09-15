@@ -7,6 +7,7 @@
   #include "src/streamhub/media.h"
   #include "tests/streamhub-fixture.h"
 
+  #include <future>
   #include <gtest/gtest.h>
   #include <limits>
 
@@ -31,8 +32,9 @@ namespace {
     /** @brief Publish a minimal Annex-B fixture. */
     void video(uint64_t id, uint32_t slot, bool key, uint64_t pts, unsigned slices = 1) {
       std::vector<uint8_t> bytes = key ? std::vector<uint8_t> {0, 0, 1, 0x67, 0x80, 0, 0, 1, 0x68, 0x80, 0, 0, 1, 0x65, 0x80} : std::vector<uint8_t> {0, 0, 1, 0x41, 0x80};
-      for (unsigned i = 1; i < slices; ++i)
+      for (unsigned i = 1; i < slices; ++i) {
         bytes.insert(bytes.end(), {0, 0, 1, uint8_t(key ? 0x65 : 0x41), 0x80});
+      }
       streamhub::mapped_resource mapping(copy_fd(backing[4 + slot].fd.get()), 4096, true);
       std::memcpy(mapping.data, bytes.data(), bytes.size());
       p::video_queue::producer producer(*static_cast<p::video_queue *>(resources->at(0)->data));
@@ -68,6 +70,81 @@ namespace {
     EXPECT_FALSE(reader.pending());
   }
 
+  TEST(StreamHubVideoTest, WaitWakesForPublicationCompletionAndCancellation) {
+    using namespace std::chrono_literals;
+    fixture f;
+    streamhub::video_reader reader(f.resources, p::video_codec::h264);
+    auto limit = [] {
+      return std::chrono::steady_clock::now() + 2s;
+    };
+    auto ready = std::async(std::launch::async, [&] {
+      return reader.wait({}, limit());
+    });
+    EXPECT_EQ(ready.wait_for(20ms), std::future_status::timeout);
+    f.video(0, 0, true, streamhub::monotonic_ns());
+    ASSERT_EQ(ready.wait_for(500ms), std::future_status::ready);
+    EXPECT_TRUE(ready.get());
+    auto frame = reader.next();
+    ASSERT_TRUE(frame);
+    auto completion = std::async(std::launch::async, [&] {
+      return reader.wait({}, limit());
+    });
+    EXPECT_EQ(completion.wait_for(20ms), std::future_status::timeout);
+    frame->lease->complete();
+    ASSERT_EQ(completion.wait_for(500ms), std::future_status::ready);
+    EXPECT_TRUE(completion.get());
+    EXPECT_TRUE(reader.reclaim());
+    std::stop_source stop;
+    auto cancelled = std::async(std::launch::async, [&] {
+      return reader.wait(stop.get_token(), limit());
+    });
+    stop.request_stop();
+    ASSERT_EQ(cancelled.wait_for(500ms), std::future_status::ready);
+    EXPECT_FALSE(cancelled.get());
+  }
+
+  TEST(StreamHubVideoTest, LocalInterruptWakesEmptyReaderAndDeadlineRemainsBounded) {
+    using namespace std::chrono_literals;
+    fixture f;
+    streamhub::video_reader reader(f.resources, p::video_codec::h264);
+    std::atomic_bool interrupt {false};
+    auto waiting = std::async(std::launch::async, [&] {
+      return reader.wait({}, std::chrono::steady_clock::now() + 2s, [&] {
+        return interrupt.load();
+      });
+    });
+    EXPECT_EQ(waiting.wait_for(20ms), std::future_status::timeout);
+    interrupt.store(true);
+    p::video_queue::consumer notification(*static_cast<p::video_queue *>(f.resources->at(0)->data));
+    notification.notification().signal();
+    ASSERT_EQ(waiting.wait_for(500ms), std::future_status::ready);
+    EXPECT_TRUE(waiting.get());
+    EXPECT_FALSE(reader.next());
+    EXPECT_FALSE(reader.wait({}, std::chrono::steady_clock::now() + 10ms));
+  }
+
+  TEST(StreamHubAudioTest, WaitWakesOnPcmPublicationAndCancellation) {
+    using namespace std::chrono_literals;
+    fixture f;
+    streamhub::audio_reader reader(f.resources, f.request.audio);
+    std::stop_source stop;
+    auto waiting = std::async(std::launch::async, [&] {
+      return reader.wait(stop.get_token());
+    });
+    EXPECT_EQ(waiting.wait_for(20ms), std::future_status::timeout);
+    p::audio_queue::producer producer(*static_cast<p::audio_queue *>(f.resources->at(1)->data));
+    producer.enqueue({0, streamhub::monotonic_ns(), 0, 0, 0});
+    ASSERT_EQ(waiting.wait_for(500ms), std::future_status::ready);
+    EXPECT_TRUE(waiting.get());
+    ASSERT_TRUE(reader.next());
+    auto cancelled = std::async(std::launch::async, [&] {
+      return reader.wait(stop.get_token());
+    });
+    stop.request_stop();
+    ASSERT_EQ(cancelled.wait_for(500ms), std::future_status::ready);
+    EXPECT_FALSE(cancelled.get());
+  }
+
   TEST(StreamHubVideoTest, AcceptedH264SliceCountIsNotHardwarePolicy) {
     fixture f;
     f.video(0, 0, true, streamhub::monotonic_ns(), 2);
@@ -94,15 +171,19 @@ namespace {
   TEST(StreamHubVideoTest, HevcSlicesShareOneLeaseAndRejectCountOrPictureMismatch) {
     for (unsigned mode = 0; mode < 4; ++mode) {
       std::vector<bool> calls;
-      fixture f([&](int, bool start) { calls.push_back(start); });
+      fixture f([&](int, bool start) {
+        calls.push_back(start);
+      });
       calls.clear();
-      const std::vector<uint8_t> bytes {0,0,1,0x40,1,0x80,0,0,1,0x42,1,0x80,
-                                      0,0,1,0x44,1,0x80,0,0,1,0x26,1,0xa0,
-                                      0,0,1,0x26,1,0x20};
+      const std::vector<uint8_t> bytes {0, 0, 1, 0x40, 1, 0x80, 0, 0, 1, 0x42, 1, 0x80, 0, 0, 1, 0x44, 1, 0x80, 0, 0, 1, 0x26, 1, 0xa0, 0, 0, 1, 0x26, 1, 0x20};
       streamhub::mapped_resource mapping(copy_fd(f.backing[4].fd.get()), 4096, true);
       std::memcpy(mapping.data, bytes.data(), bytes.size());
-      if (mode == 2) static_cast<uint8_t *>(mapping.data)[29] = 0xa0;
-      if (mode == 3) static_cast<uint8_t *>(mapping.data)[28] = 2;
+      if (mode == 2) {
+        static_cast<uint8_t *>(mapping.data)[29] = 0xa0;
+      }
+      if (mode == 3) {
+        static_cast<uint8_t *>(mapping.data)[28] = 2;
+      }
       p::video_queue::producer producer(*static_cast<p::video_queue *>(f.resources->at(0)->data));
       producer.enqueue({0, streamhub::monotonic_ns(), 0, 0, uint32_t(bytes.size()), 1, 0});
       streamhub::video_reader reader(f.resources, p::video_codec::hevc, mode == 1 ? 1 : 2);

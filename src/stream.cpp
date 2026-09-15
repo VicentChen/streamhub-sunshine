@@ -1,6 +1,8 @@
 #ifdef __linux__
   #include "streamhub/gamepad.h"
   #include "streamhub/media.h"
+
+  #include <streamhub-protocal/fd-event.hpp>
 #endif
 /**
  * @file src/stream.cpp
@@ -364,7 +366,7 @@ namespace stream {
 
   static inline void while_starting_do_nothing(std::atomic<session::state_e> &state) {
     while (state.load(std::memory_order_acquire) == session::state_e::STARTING) {
-      std::this_thread::sleep_for(1ms);
+      state.wait(session::state_e::STARTING, std::memory_order_acquire);
     }
   }
 
@@ -493,6 +495,9 @@ namespace stream {
 #ifdef __linux__
     std::unique_ptr<streamhub::receiver> provider;  ///< Per-stream control and resource ownership.
     std::jthread providerThread;  ///< Sole Provider control/gamepad worker.
+    std::shared_ptr<streamhub::resources> provider_memory;  ///< Stable notification mappings until session destruction.
+    std::shared_ptr<streamhub::protocal::fd_event> provider_notice = std::make_shared<streamhub::protocal::fd_event>();  ///< Local control readiness.
+    std::stop_source media_stop;  ///< Cancels media/control readiness waits at shutdown.
     std::atomic_bool provider_idr {false};  ///< Video worker requests an IDR through the control owner.
     std::atomic_uint network_packets {0};  ///< Packets still referencing session network state.
 #endif
@@ -1187,6 +1192,15 @@ namespace stream {
       BOOST_LOG(debug) << "type [IDX_REQUEST_IDR_FRAME]"sv;
 
       session->video.idr_events->raise(true);
+#ifdef __linux__
+      if (session->provider_memory) {
+        streamhub::protocal::video_queue::consumer view(
+          *static_cast<streamhub::protocal::video_queue *>(session->provider_memory->at(0)->data)
+        );
+        view.notification().signal();
+      }
+      mail::man->queue<video::packet_t>(mail::video_packets)->wake_waiters();
+#endif
     });
 
     server->map(packetTypes[IDX_INVALIDATE_REF_FRAMES], [&](session_t *session, const std::string_view &payload) {
@@ -1200,6 +1214,15 @@ namespace stream {
         << "lastFrame [" << lastFrame << ']';
 
       session->video.invalidate_ref_frames_events->raise(std::make_pair(firstFrame, lastFrame));
+#ifdef __linux__
+      if (session->provider_memory) {
+        streamhub::protocal::video_queue::consumer view(
+          *static_cast<streamhub::protocal::video_queue *>(session->provider_memory->at(0)->data)
+        );
+        view.notification().signal();
+      }
+      mail::man->queue<video::packet_t>(mail::video_packets)->wake_waiters();
+#endif
     });
 
     server->map(packetTypes[IDX_INPUT_DATA], [&](session_t *session, const std::string_view &payload) {
@@ -2130,6 +2153,7 @@ namespace stream {
 
     ~network_lease() {
       --owner->network_packets;
+      owner->network_packets.notify_all();
     }
   };
 
@@ -2175,46 +2199,69 @@ namespace stream {
     bool healthy = true;
     try {
       streamhub::gamepad_bridge controllers(session->provider->memory(), session->provider->accepted().gamepad);
-      while (!stop.stop_requested()) {
+      const auto notice = session->provider_notice;
+      session->input->events->set_notify([notice] {
+        notice->signal();
+      });
+      // Queue observers only relay revisions; the control owner remains the
+      // sole producer/consumer and performs every full/empty/dequeue operation.
+      auto watch = [notice](streamhub::protocal::shared_event &event) {
+        return std::jthread([notice, &event](std::stop_token observer_stop) {
+          auto seen = event.revision();
+          notice->signal();
+          while (event.wait(seen, observer_stop)) {
+            seen = event.revision();
+            notice->signal();
+          }
+        });
+      };
+      auto input_space = watch(controllers.input_notification());
+      auto feedback_data = watch(controllers.feedback_notification());
+      while (!stop.stop_requested() && !session->shutdown_event->peek()) {
         if (!session->provider->poll()) {
           throw std::runtime_error("Provider stopped the session");
         }
-        if (!session->shutdown_event->peek()) {
-          if (session->provider_idr.exchange(false)) {
-            session->provider->request_idr();
+        if (session->provider_idr.exchange(false)) {
+          session->provider->request_idr();
+        }
+        if (session->input->overflow.load()) {
+          throw std::runtime_error("Moonlight controller queue overflow");
+        }
+        for (unsigned budget = 0; budget < 64 && controllers.ready(); ++budget) {
+          auto event = session->input->events->pop(0ms);
+          if (!event) {
+            break;
           }
-          if (session->input->overflow.load()) {
-            throw std::runtime_error("Moonlight controller queue overflow");
+          if (auto arrival = std::get_if<platf::gamepad_arrival_t>(&event->data)) {
+            controllers.arrival(event->controller, arrival->supportedButtons, bool(arrival->capabilities & LI_CCAP_RUMBLE));
           }
-          if (controllers.ready()) {
-            if (auto event = session->input->events->pop(0ms)) {
-              if (auto arrival = std::get_if<platf::gamepad_arrival_t>(&event->data)) {
-                controllers.arrival(event->controller, arrival->supportedButtons, bool(arrival->capabilities & LI_CCAP_RUMBLE));
-              }
-              if (auto state = std::get_if<input::gamepad_state_t>(&event->data)) {
-                const auto &s = state->state;
-                controllers.state(event->controller, state->active_mask, {s.buttonFlags, s.lt, s.rt, s.lsX, s.lsY, s.rsX, s.rsY});
-              }
-            }
+          if (auto state = std::get_if<input::gamepad_state_t>(&event->data)) {
+            const auto &value = state->state;
+            controllers.state(event->controller, state->active_mask, {value.buttonFlags, value.lt, value.rt, value.lsX, value.lsY, value.rsX, value.rsY});
           }
-          controllers.flush();
+        }
+        controllers.flush();
+        for (unsigned budget = 0; budget < 64 && controllers.feedback_ready(); ++budget) {
           if (auto feedback = controllers.feedback()) {
             if (!session->control.feedback_queue->try_raise(platf::gamepad_feedback_msg_t::make_rumble(feedback->index, feedback->low, feedback->high))) {
               throw std::runtime_error("Moonlight feedback queue overflow");
             }
           }
         }
-        std::this_thread::sleep_for(1ms);
+        if ((controllers.ready() && session->input->events->peek()) || controllers.feedback_ready()) {
+          continue;
+        }
+        pollfd events[] {{session->provider->native_socket(), POLLIN, 0}, {notice->fd(), POLLIN, 0}};
+        streamhub::protocal::wait_fds(events, session->media_stop.get_token(), std::min(session->provider->next_deadline(), controllers.next_deadline()));
+        notice->drain();
       }
     } catch (const std::exception &e) {
       healthy = false;
       BOOST_LOG(error) << "StreamHub control session failed: " << e.what();
       session::stop(*session);
     }
-    // join() requests this token only after video/audio have stopped all shared reads.
-    while (!stop.stop_requested()) {
-      std::this_thread::sleep_for(1ms);
-    }
+    // join requests this token only after all media reads and reclamation end.
+    streamhub::protocal::wait_fds({}, stop);
     if (healthy) {
       try {
         session->provider->stop();
@@ -2242,6 +2289,7 @@ namespace stream {
           retries = 0;
           requested_at = streamhub::monotonic_ns();
           session->provider_idr.store(true);
+          session->provider_notice->signal();
           idr_deadline = std::chrono::steady_clock::now() + 1s;
         }
         if (awaiting_idr && std::chrono::steady_clock::now() >= idr_deadline) {
@@ -2249,6 +2297,7 @@ namespace stream {
             throw std::runtime_error("Provider did not produce a requested IDR");
           }
           session->provider_idr.store(true);
+          session->provider_notice->signal();
           idr_deadline = std::chrono::steady_clock::now() + 1s;
         }
         if (!pending) {
@@ -2259,10 +2308,21 @@ namespace stream {
             pending = std::make_unique<provider_packet>(std::move(*frame), *session);
           }
         }
-        if (pending && !packets->try_raise(std::move(pending)) && !packets->running()) {
-          throw std::runtime_error("Video network queue stopped");
+        auto interrupt = [&] {
+          return session->video.idr_events->peek() ||
+                 session->video.invalidate_ref_frames_events->peek();
+        };
+        const auto until = awaiting_idr ? idr_deadline : streamhub::transport::deadline::max();
+        if (pending) {
+          if (!packets->try_raise(std::move(pending))) {
+            if (!packets->running()) {
+              throw std::runtime_error("Video network queue stopped");
+            }
+            packets->wait_space(session->media_stop.get_token(), until, interrupt);
+          }
+        } else {
+          reader.wait(session->media_stop.get_token(), until, interrupt);
         }
-        std::this_thread::sleep_for(1ms);
       }
     } catch (const std::exception &e) {
       BOOST_LOG(error) << "StreamHub video failed: " << e.what();
@@ -2273,7 +2333,7 @@ namespace stream {
       return packet->channel_data == session;
     });
     while (!reader.reclaim()) {
-      std::this_thread::sleep_for(1ms);
+      reader.wait({});
     }
   }
 
@@ -2286,7 +2346,7 @@ namespace stream {
     while (!session->shutdown_event->peek()) {
       auto frame = reader.next();
       if (!frame) {
-        std::this_thread::sleep_for(1ms);
+        reader.wait(session->media_stop.get_token());
         continue;
       }
       if (!first_sample) {
@@ -2302,7 +2362,7 @@ namespace stream {
         if (!packets->running()) {
           throw std::runtime_error("Audio network queue stopped");
         }
-        std::this_thread::sleep_for(1ms);
+        packets->wait_space(session->media_stop.get_token());
       }
     }
   }
@@ -2391,6 +2451,7 @@ namespace stream {
         audio::validate_config(a);
         streamhub::requirements request {v.width, v.height, v.framerate, v.framerateX100, v.bitrate, v.videoFormat, v.encoderCscMode, v.dynamicRange, v.chromaSamplingType, v.enableIntraRefresh, v.numRefFrames, v.slicesPerFrame, a.channels, a.mask, a.packetDuration};
         session.provider = std::make_unique<streamhub::receiver>(config::streamhub_socket, streamhub::negotiate(launch.input_id, request), launch.cancel.get_token());
+        session.provider_memory = session.provider->memory();
         BOOST_LOG(info) << "StreamHub CONNECTED input=" << launch.input_id << " session=" << session.provider->id();
         return 0;
       } catch (const std::exception &e) {
@@ -2430,6 +2491,10 @@ namespace stream {
       }
 
       session.shutdown_event->raise(true);
+#ifdef __linux__
+      session.media_stop.request_stop();
+      session.provider_notice->signal();
+#endif
     }
 
     /**
@@ -2470,8 +2535,9 @@ namespace stream {
       audio_packets->discard_if([&](const auto &p) {
         return p.first == &session;
       });
-      while (session.network_packets.load()) {
-        std::this_thread::sleep_for(1ms);
+      for (auto remaining = session.network_packets.load(); remaining;
+           remaining = session.network_packets.load()) {
+        session.network_packets.wait(remaining);
       }
       session.provider.reset();
 #endif
@@ -2497,11 +2563,13 @@ namespace stream {
       }
 #endif
       session.state.store(state_e::STARTING);
+      session.state.notify_all();
       session.input = input::alloc(session.mail);
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {
         session.state.store(state_e::STOPPED);
+        session.state.notify_all();
         return -1;
       }
 
@@ -2527,6 +2595,7 @@ namespace stream {
       session.videoThread = std::jthread {videoThread, &session};
 
       session.state.store(state_e::RUNNING, std::memory_order_release);
+      session.state.notify_all();
 #ifdef __linux__
       session.providerThread = std::jthread {providerThread, &session};
 #endif
@@ -2609,6 +2678,7 @@ namespace stream {
 
       session->control.peer = nullptr;
       session->state.store(state_e::STOPPED, std::memory_order_relaxed);
+      session->state.notify_all();
 
       session->mail = std::move(mail);
 

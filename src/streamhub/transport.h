@@ -68,6 +68,12 @@ namespace streamhub {
      */
     /** @brief Report readable control data or peer closure without consuming a packet. */
     bool pending() const;
+
+    /** @brief Borrow the socket for multiplexed readiness; never close it externally. */
+    int native_socket() const {
+      return socket_.get();
+    }
+
     control_packet receive(deadline until, std::stop_token stop = {});
 
   private:

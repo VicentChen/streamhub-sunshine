@@ -65,6 +65,17 @@ namespace streamhub {
     ~receiver();
     /** @brief Process ready control packets; false means Provider stopped this session. */
     bool poll();
+
+    /** @brief Borrow the sole control socket for readiness waiting. */
+    int native_socket() const {
+      return connection_.native_socket();
+    }
+
+    /** @brief Next acknowledgement deadline, or no timed work. */
+    transport::deadline next_deadline() const {
+      return idr_request_ ? idr_deadline_ : transport::deadline::max();
+    }
+
     /** @brief Request an IDR, allowing only one unacknowledged request at a time. */
     void request_idr();
     /** @brief End a session after all local queue and payload accesses have finished. */

@@ -90,6 +90,9 @@ namespace streamhub {
 
   void video_lease::complete() {
     completion_->done.store(true, std::memory_order_release);
+    if (completion_->changed) {
+      completion_->changed->signal();
+    }
   }
 
   video_reader::video_reader(std::shared_ptr<resources> resources, p::video_codec codec, uint16_t slices):
@@ -112,6 +115,19 @@ namespace streamhub {
     return true;
   }
 
+  bool video_reader::wait(std::stop_token stop, transport::deadline deadline, const std::function<bool()> &interrupt) {
+    while (!stop.stop_requested()) {
+      const auto seen = queue_.notification().revision();
+      if ((pending_ ? pending_->done.load(std::memory_order_acquire) : !queue_.empty()) || (interrupt && interrupt())) {
+        return true;
+      }
+      if (!queue_.notification().wait(seen, stop, deadline)) {
+        return false;
+      }
+    }
+    return false;
+  }
+
   std::optional<video_frame> video_reader::next() {
     if (!reclaim() || queue_.empty()) {
       return {};
@@ -126,6 +142,8 @@ namespace streamhub {
     auto mapping = resources_->at(4 + info.buffer_slot);
     // Allocate notification before START so allocation failure leaves no active read.
     auto completion = std::make_shared<read_completion>();
+    completion->owner = resources_;
+    completion->changed = &queue_.notification();
     auto lease = std::make_shared<video_lease>(completion, mapping);
     resources_->sync(info.buffer_slot, true);
     auto bytes = std::span(static_cast<const uint8_t *>(mapping->data), info.data_bytes);

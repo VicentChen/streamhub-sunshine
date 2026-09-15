@@ -11,6 +11,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <stop_token>
 #include <vector>
 
 // local includes
@@ -426,6 +427,9 @@ namespace safe {
       _queue.emplace_back(std::forward<Args>(args)...);
 
       _cv.notify_all();
+      if (_notify) {
+        _notify();
+      }
     }
 
     /**
@@ -436,9 +440,14 @@ namespace safe {
     template<class... Args>
     bool try_raise(Args &&...args) {
       std::lock_guard guard {_lock};
-      if (!_continue || _queue.size() >= _max_elements) return false;
+      if (!_continue || _queue.size() >= _max_elements) {
+        return false;
+      }
       _queue.emplace_back(std::forward<Args>(args)...);
       _cv.notify_all();
+      if (_notify) {
+        _notify();
+      }
       return true;
     }
 
@@ -451,6 +460,9 @@ namespace safe {
       std::lock_guard guard {_lock};
       std::erase_if(_queue, predicate);
       _cv.notify_all();
+      if (_notify) {
+        _notify();
+      }
     }
 
     /**
@@ -485,6 +497,7 @@ namespace safe {
 
       auto val = std::move(_queue.front());
       _queue.erase(std::begin(_queue));
+      _cv.notify_all();
 
       return val;
     }
@@ -511,8 +524,50 @@ namespace safe {
 
       auto val = std::move(_queue.front());
       _queue.erase(std::begin(_queue));
+      _cv.notify_all();
 
       return val;
+    }
+
+    /**
+     * @brief Wait for producer space or cancellation without transferring a value.
+     * @param stop Session cancellation token.
+     * @param deadline Absolute steady clock cutoff.
+     * @param interrupt Optional local request predicate; its producer calls wake_waiters.
+     * @return True if the running queue has room.
+     */
+    bool wait_space(std::stop_token stop, std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max(), const std::function<bool()> &interrupt = {}) {
+      std::unique_lock lock(_lock);
+      _cv.wait_until(lock, stop, deadline, [this, &interrupt] {
+        return !_continue || _queue.size() < _max_elements || (interrupt && interrupt());
+      });
+      return !stop.stop_requested() && _continue && _queue.size() < _max_elements;
+    }
+
+    /** @brief Wake blocked producers so their interrupt predicate can be rechecked. */
+    void wake_waiters() {
+      std::lock_guard lock(_lock);
+      _cv.notify_all();
+    }
+
+    /**
+     * @brief Install a nonblocking callback for new data and queue shutdown.
+     * @param notify Callback must not call back into this queue.
+     */
+    void set_notify(std::function<void()> notify) {
+      std::lock_guard lock(_lock);
+      _notify = std::move(notify);
+      if (_notify && (!_queue.empty() || !_continue)) {
+        _notify();
+      }
+    }
+
+    /** @brief Wake the external readiness observer, including after overflow. */
+    void wake() {
+      std::lock_guard lock(_lock);
+      if (_notify) {
+        _notify();
+      }
     }
 
     /**
@@ -533,6 +588,9 @@ namespace safe {
       _continue = false;
 
       _cv.notify_all();
+      if (_notify) {
+        _notify();
+      }
     }
 
     /**
@@ -550,7 +608,8 @@ namespace safe {
     std::uint32_t _max_elements;
 
     mutable std::mutex _lock;
-    std::condition_variable _cv;
+    std::condition_variable_any _cv;
+    std::function<void()> _notify;  ///< Optional nonblocking external readiness callback.
 
     std::vector<T> _queue;
   };

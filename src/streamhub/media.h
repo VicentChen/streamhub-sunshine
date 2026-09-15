@@ -12,6 +12,8 @@ namespace streamhub {
   /** @brief Completion state shared with a network packet; never touches queue indices. */
   struct read_completion {
     std::atomic_bool done {false};
+    std::shared_ptr<resources> owner;  ///< Keeps notification storage alive.
+    protocal::shared_event *changed = nullptr;  ///< Original video consumer wakeup.
   };
 
   /** @brief Downstream lease; completing it only notifies the original consumer. */
@@ -51,6 +53,14 @@ namespace streamhub {
     std::optional<video_frame> next();
     /** @brief Finish READ END and dequeue when the downstream read has completed. */
     bool reclaim();
+    /**
+     * @brief Wait for data, downstream completion, an interrupt, or cancellation.
+     * @param stop Session cancellation token.
+     * @param deadline Next control retry deadline.
+     * @param interrupt Nonblocking predicate for pending IDR/invalidation work.
+     * @return True if work is ready.
+     */
+    bool wait(std::stop_token stop, transport::deadline deadline = transport::deadline::max(), const std::function<bool()> &interrupt = {});
 
     /** @brief Return whether a downstream read remains in flight. */
     bool pending() const {
@@ -81,6 +91,11 @@ namespace streamhub {
     audio_reader(std::shared_ptr<resources> resources, protocal::audio_request_info format);
     /** @brief Copy one block after validating slot, values and source timeline. */
     std::optional<pcm_frame> next();
+
+    /** @brief Wait for a complete published PCM descriptor or cancellation. */
+    bool wait(std::stop_token stop) {
+      return queue_.wait_data(stop);
+    }
 
   private:
     std::shared_ptr<resources> resources_;  ///< Mapping owner.
