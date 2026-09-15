@@ -14,7 +14,7 @@ namespace streamhub {
     int bitrate_kbps = 10000;  ///< Video bandwidth after transport overhead.
     int codec = 0, csc = 2;  ///< Moonlight codec and colorspace/range values.
     int depth = 0, chroma = 0, intra_refresh = 0;  ///< Unsupported extensions must remain zero.
-    int references = 0, slices = 1;  ///< Exact decoder constraints.
+    int references = 0, slices = 1;  ///< Maximum references (0 unconstrained) and minimum slice count.
     int channels = 2, channel_mask = 3, packet_ms = 5;  ///< PCM layout and Opus duration.
   };
 

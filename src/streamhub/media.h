@@ -40,8 +40,13 @@ namespace streamhub {
   /** @brief Single video consumer, allowing at most one downstream read at a time. */
   class video_reader {
   public:
-    /** @brief Bind to validated shared queues and accepted codec. */
-    video_reader(std::shared_ptr<resources> resources, protocal::video_codec codec);
+    /**
+     * @brief Bind to validated shared queues and actual accepted slice count.
+     * @param resources Complete session mappings.
+     * @param codec Accepted Annex-B codec.
+     * @param slices Actual slices in every complete access unit, from ACCEPT.
+     */
+    video_reader(std::shared_ptr<resources> resources, protocal::video_codec codec, uint16_t slices = 1);
     /** @brief Return a new frame if available; reclaim a completed old lease first. */
     std::optional<video_frame> next();
     /** @brief Finish READ END and dequeue when the downstream read has completed. */
@@ -56,6 +61,7 @@ namespace streamhub {
     std::shared_ptr<resources> resources_;  ///< Keeps mappings valid.
     protocal::video_queue::consumer queue_;  ///< Sole tail writer.
     protocal::video_codec codec_;  ///< Expected Annex-B codec.
+    uint16_t slices_;  ///< Actual slices per complete access unit from ACCEPT.
     std::shared_ptr<read_completion> pending_;  ///< One outstanding lease.
     uint64_t ordinal_ = 0, last_id_ = 0, last_pts_ = 0;  ///< Publication and time validation.
     size_t slot_ = 0;  ///< Slot awaiting READ END.

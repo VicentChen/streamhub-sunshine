@@ -29,8 +29,10 @@ namespace {
     }
 
     /** @brief Publish a minimal Annex-B fixture. */
-    void video(uint64_t id, uint32_t slot, bool key, uint64_t pts) {
+    void video(uint64_t id, uint32_t slot, bool key, uint64_t pts, unsigned slices = 1) {
       std::vector<uint8_t> bytes = key ? std::vector<uint8_t> {0, 0, 1, 0x67, 0x80, 0, 0, 1, 0x68, 0x80, 0, 0, 1, 0x65, 0x80} : std::vector<uint8_t> {0, 0, 1, 0x41, 0x80};
+      for (unsigned i = 1; i < slices; ++i)
+        bytes.insert(bytes.end(), {0, 0, 1, uint8_t(key ? 0x65 : 0x41), 0x80});
       streamhub::mapped_resource mapping(copy_fd(backing[4 + slot].fd.get()), 4096, true);
       std::memcpy(mapping.data, bytes.data(), bytes.size());
       p::video_queue::producer producer(*static_cast<p::video_queue *>(resources->at(0)->data));
@@ -66,6 +68,18 @@ namespace {
     EXPECT_FALSE(reader.pending());
   }
 
+  TEST(StreamHubVideoTest, AcceptedH264SliceCountIsNotHardwarePolicy) {
+    fixture f;
+    f.video(0, 0, true, streamhub::monotonic_ns(), 2);
+    streamhub::video_reader reader(f.resources, p::video_codec::h264, 2);
+    auto frame = reader.next();
+    ASSERT_TRUE(frame);
+    EXPECT_EQ(frame->bytes.size(), 20);
+    EXPECT_FALSE(reader.reclaim());
+    frame.reset();
+    EXPECT_TRUE(reader.reclaim());
+  }
+
   TEST(StreamHubVideoTest, FirstFrameFlagsAndSlotAreChecked) {
     fixture f;
     streamhub::video_reader reader(f.resources, p::video_codec::h264);
@@ -75,6 +89,36 @@ namespace {
     streamhub::video_reader wrong_reader(wrong.resources, p::video_codec::h264);
     wrong.video(0, 1, true, streamhub::monotonic_ns());
     EXPECT_THROW(wrong_reader.next(), std::runtime_error);
+  }
+
+  TEST(StreamHubVideoTest, HevcSlicesShareOneLeaseAndRejectCountOrPictureMismatch) {
+    for (unsigned mode = 0; mode < 4; ++mode) {
+      std::vector<bool> calls;
+      fixture f([&](int, bool start) { calls.push_back(start); });
+      calls.clear();
+      const std::vector<uint8_t> bytes {0,0,1,0x40,1,0x80,0,0,1,0x42,1,0x80,
+                                      0,0,1,0x44,1,0x80,0,0,1,0x26,1,0xa0,
+                                      0,0,1,0x26,1,0x20};
+      streamhub::mapped_resource mapping(copy_fd(f.backing[4].fd.get()), 4096, true);
+      std::memcpy(mapping.data, bytes.data(), bytes.size());
+      if (mode == 2) static_cast<uint8_t *>(mapping.data)[29] = 0xa0;
+      if (mode == 3) static_cast<uint8_t *>(mapping.data)[28] = 2;
+      p::video_queue::producer producer(*static_cast<p::video_queue *>(f.resources->at(0)->data));
+      producer.enqueue({0, streamhub::monotonic_ns(), 0, 0, uint32_t(bytes.size()), 1, 0});
+      streamhub::video_reader reader(f.resources, p::video_codec::hevc, mode == 1 ? 1 : 2);
+      if (mode) {
+        EXPECT_THROW(reader.next(), std::runtime_error);
+        EXPECT_EQ(calls, (std::vector<bool> {true, false}));
+      } else {
+        auto frame = reader.next();
+        ASSERT_TRUE(frame);
+        EXPECT_EQ(frame->bytes.size(), bytes.size());
+        EXPECT_FALSE(reader.reclaim());
+        frame.reset();
+        EXPECT_TRUE(reader.reclaim());
+        EXPECT_EQ(calls, (std::vector<bool> {true, false}));
+      }
+    }
   }
 
   TEST(StreamHubVideoTest, MalformedPayloadEndsDmaRead) {

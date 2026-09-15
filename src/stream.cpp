@@ -2226,7 +2226,7 @@ namespace stream {
 
   /** @brief Submit DMA-backed video with bounded backpressure and original-consumer reclamation. */
   void providerVideo(session_t *session) {
-    streamhub::video_reader reader(session->provider->memory(), session->provider->accepted().video.format.codec);
+    streamhub::video_reader reader(session->provider->memory(), session->provider->accepted().video.format.codec, session->provider->accepted().video.slices_per_frame);
     auto packets = mail::man->queue<video::packet_t>(mail::video_packets);
     video::packet_t pending;
     bool awaiting_idr = false;

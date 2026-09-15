@@ -20,8 +20,9 @@ namespace streamhub {
     }
 
     /** @brief Check random-access parameter-set and frame-type claims without copying an access unit. */
-    void inspect(std::span<const uint8_t> bytes, p::video_codec codec, bool idr) {
+    void inspect(std::span<const uint8_t> bytes, p::video_codec codec, bool idr, uint16_t expected_slices) {
       bool vcl = false, actual_idr = false, sps = false, pps = false, vps = false;
+      unsigned slices = 0, picture_type = 0, temporal_id = 0;
       size_t first = SIZE_MAX;
       for (size_t i = 0; i + 3 < bytes.size(); ++i) {
         if (bytes[i] || bytes[i + 1]) {
@@ -41,14 +42,30 @@ namespace streamhub {
         }
         require(!(bytes[header] & 0x80), "StreamHub forbidden NAL bit");
         if (codec == p::video_codec::h264) {
-          auto type = bytes[header] & 31;
+          const unsigned type = bytes[header] & 31;
+          if (type == 1 || type == 5) {
+            require(!slices || picture_type == type, "StreamHub mixed H.264 slice types");
+            require(type != 5 || (sps && pps), "StreamHub IDR missing preceding parameter sets");
+            picture_type = type;
+            ++slices;
+          }
           vcl |= type == 1 || type == 5;
           actual_idr |= type == 5;
           sps |= type == 7;
           pps |= type == 8;
         } else {
           require(header + 1 < bytes.size() && (bytes[header + 1] & 7), "StreamHub invalid HEVC header");
-          auto type = (bytes[header] >> 1) & 63;
+          const unsigned type = (bytes[header] >> 1) & 63;
+          if (type <= 31) {
+            require(header + 2 < bytes.size(), "StreamHub truncated HEVC slice");
+            require(unsigned(bytes[header + 2] >> 7) == unsigned(slices == 0), "StreamHub multiple HEVC pictures or missing first slice");
+            require(!slices || (picture_type == type && temporal_id == (bytes[header + 1] & 7)), "StreamHub mixed HEVC picture prefixes");
+            require(type < 16 || type == 19 || type == 20 || type > 23, "StreamHub unsupported non-IDR recovery");
+            require((type != 19 && type != 20) || (vps && sps && pps), "StreamHub IDR missing preceding parameter sets");
+            picture_type = type;
+            temporal_id = bytes[header + 1] & 7;
+            ++slices;
+          }
           vcl |= type <= 31;
           actual_idr |= type == 19 || type == 20;
           vps |= type == 32;
@@ -58,6 +75,7 @@ namespace streamhub {
         i = header;
       }
       require(first == 0 && vcl && actual_idr == idr, "StreamHub Annex-B or IDR flag mismatch");
+      require(slices == expected_slices, "StreamHub slice count differs from ACCEPT");
       require(!idr || (sps && pps && (codec == p::video_codec::h264 || vps)), "StreamHub IDR missing parameter sets");
     }
   }  // namespace
@@ -74,10 +92,11 @@ namespace streamhub {
     completion_->done.store(true, std::memory_order_release);
   }
 
-  video_reader::video_reader(std::shared_ptr<resources> resources, p::video_codec codec):
+  video_reader::video_reader(std::shared_ptr<resources> resources, p::video_codec codec, uint16_t slices):
       resources_(std::move(resources)),
       queue_(*static_cast<p::video_queue *>(resources_->at(0)->data)),
-      codec_(codec) {}
+      codec_(codec),
+      slices_(slices) {}
 
   bool video_reader::reclaim() {
     if (!pending_) {
@@ -111,7 +130,7 @@ namespace streamhub {
     resources_->sync(info.buffer_slot, true);
     auto bytes = std::span(static_cast<const uint8_t *>(mapping->data), info.data_bytes);
     try {
-      inspect(bytes, codec_, idr);
+      inspect(bytes, codec_, idr, slices_);
     } catch (...) {
       resources_->sync(info.buffer_slot, false);
       throw;

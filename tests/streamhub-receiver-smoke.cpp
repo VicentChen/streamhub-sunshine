@@ -17,7 +17,7 @@ int main(int argc, char **argv) {
     requirements.references = 1;
     requirements.fps_x100 = 5994;
     streamhub::receiver receiver(argv[1], streamhub::negotiate("hdmi-main", requirements));
-    streamhub::video_reader video(receiver.memory(), receiver.accepted().video.format.codec);
+    streamhub::video_reader video(receiver.memory(), receiver.accepted().video.format.codec, receiver.accepted().video.slices_per_frame);
     streamhub::audio_reader audio(receiver.memory(), receiver.accepted().audio);
     unsigned frames = 0, blocks = 0;
     bool refreshed = false;

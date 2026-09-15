@@ -101,6 +101,13 @@ namespace {
     r.video.max_level = 42;
     auto a = accepted(r);
     EXPECT_NO_THROW(streamhub::validate_accept(r, a));
+    a.video.slices_per_frame = 2;
+    EXPECT_NO_THROW(streamhub::validate_accept(r, a));
+    r.video.slices_per_frame = 2;
+    EXPECT_NO_THROW(streamhub::validate_accept(r, a));
+    a.video.slices_per_frame = 1;
+    EXPECT_THROW(streamhub::validate_accept(r, a), std::invalid_argument);
+    r.video.slices_per_frame = 1;
     std::vector<std::function<void(p::connect_accept_info &)>> changes {
       [](auto &a) {
         ++a.video.format.width;
@@ -130,7 +137,7 @@ namespace {
         ++a.video.bitrate_bps;
       },
       [](auto &a) {
-        ++a.video.slices_per_frame;
+        a.video.slices_per_frame = 0;
       },
       [](auto &a) {
         ++a.video.ref_frames;
