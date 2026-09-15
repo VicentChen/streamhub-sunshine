@@ -26,7 +26,7 @@ socket 必须为绝对路径，两进程 UID 相同。配置也在 Web General �
 | 色彩 | BT.709 limited、BT.601-525 limited |
 | 参考／slice | 实际单前向参考、无 B 帧、单 slice；max_ref_frames=1 原样协商 |
 | PCM | 48 kHz；Receiver 支持 2／6／8 声道；普通质量及立体声支持 5／10／20 ms，高质量 5.1／7.1 仅支持 5 ms；Provider 当前输出静音 |
-| 手柄 | Receiver 实现基础状态和振动；当前真实 Provider 接受零手柄能力 |
+| 手柄 | Receiver 实现基础状态和振动；当前 Provider 接受最多 16 个基础手柄，反馈为零，UI 显示时独占输入；见 [Provider 手柄输入](../../../streamhub/docs/gamepad.md) |
 
 Mac Moonlight 6.1.0 的默认请求是 BT.601 limited。本次在独立 Provider 中增加实际 MPP BT.601 RGB 转换及 SPS/VUI 校验。原生 BT.709 NV12 需要该输出时，先由 RGA 按 BT.709 转 BGR，再由 MPP 按 BT.601 转换；没有在 Receiver 修改请求或仅改色彩标签。BT.709 NV12 可继续直入 MPP；尺寸／对齐不足时仍由 RGA 处理。
 
@@ -140,3 +140,9 @@ Sunshine Linux Avahi 发布现在将这条共享 PTR 与串流服务放入同一
 复现：在产品根目录执行 python3 tools/run.py --development -- python3 sunshine/tests/run-browse-domain-test.py，传 --sunshine 指向本次构建程序，--runtime-library-path 沿用本页板端 Homebrew 动态库路径；--interface 默认 wlP2p33s0。
 
 临时诊断发布者已按时退出，iPhone 日志采集已停止。在线实例切换到产品 var/ 状态的进度由总项目 docs/storage-validation.md 记录；不得通过启动旧 /tmp 状态绕过当前目录限制。
+
+## 基础手柄与真实 Provider 接入（2026-09-15）
+
+独立 Provider 已消费基础连接／状态／断开事件，并实现默认 UI 输入归属。以上 2026-09-14 验证表中的零能力是历史状态；当前能力与测试边界见 [Provider 手柄输入](../../../streamhub/docs/gamepad.md)。
+
+新增 tests/streamhub-gamepad-smoke.cpp 使用本 fork 的生产 gamepad_bridge 与 Receiver 向真实 Provider 发出 Moonlight 格式输入，覆盖媒体队列满时的短按与断开。完整 Sunshine 测试构建也提供 streamhub-gamepad-smoke 目标；独立适配构建位于 tests/streamhub-adapter，构建、测试与双进程复现命令见上方 Provider 文档。独立目标不链接 Provider 实现，只通过 protocol 通信。

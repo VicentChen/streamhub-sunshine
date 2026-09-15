@@ -71,7 +71,7 @@ list(APPEND TEST_DEFINITIONS SUNSHINE_ASSETS_DIR="${CMAKE_CURRENT_BINARY_DIR}/te
 file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS
         ${CMAKE_SOURCE_DIR}/tests/*.h
         ${CMAKE_SOURCE_DIR}/tests/*.cpp)
-list(REMOVE_ITEM TEST_SOURCES "${CMAKE_SOURCE_DIR}/tests/streamhub-receiver-smoke.cpp")
+list(REMOVE_ITEM TEST_SOURCES "${CMAKE_SOURCE_DIR}/tests/streamhub-receiver-smoke.cpp" "${CMAKE_SOURCE_DIR}/tests/streamhub-gamepad-smoke.cpp")
 # Add macOS-specific test files only when building tests for macOS
 if (APPLE)
     file(GLOB_RECURSE MACOS_TEST_SOURCES CONFIGURE_DEPENDS
@@ -160,6 +160,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(test_streamhub_transport PRIVATE sunshine-streamhub gtest_main)
     add_executable(streamhub-receiver-smoke streamhub-receiver-smoke.cpp)
     target_link_libraries(streamhub-receiver-smoke PRIVATE sunshine-streamhub)
+    add_executable(streamhub-gamepad-smoke streamhub-gamepad-smoke.cpp)
+    target_link_libraries(streamhub-gamepad-smoke PRIVATE sunshine-streamhub)
     add_test(NAME streamhub-transport COMMAND test_streamhub_transport)
     set_tests_properties(streamhub-transport PROPERTIES TIMEOUT 30)
 endif()

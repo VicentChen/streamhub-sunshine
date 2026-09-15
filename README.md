@@ -6,7 +6,7 @@
 
 已完成计划中确定的功能裁剪：删除本机采集、视频编码、图像处理、显示管理、音频采集、虚拟输入、应用命令与托盘。保留 Moonlight 协议、网络传输、PCM→Opus、手柄解析及反馈。
 
-已接通 protocol v0.2 输入目录、精确协商、资源状态机、视频 DMA-BUF、PCM→Opus 及基础手柄／振动。Mac Moonlight 已通过 H.264／HEVC 1080p60、三次恢复及 Provider 中断后重连测试；真实 HDMI 拔插仍待有信号的现场验收。使用、兼容组合和验证边界见 [Receiver 接入](docs/streamhub/receiver-integration.md)，构建依赖见 [控制传输](docs/streamhub/control-transport.md) 和 [裁剪记录](docs/streamhub/slimming-core.md)。
+已接通 protocol v0.2 输入目录、精确协商、资源状态机、视频 DMA-BUF、PCM→Opus 及基础手柄／振动。独立 Provider 已接收基础手柄并默认交给显示中的 UI，当前反馈能力为零；见 [Provider 手柄输入](../streamhub/docs/gamepad.md)。Mac Moonlight 已通过 H.264／HEVC 1080p60、三次恢复及 Provider 中断后重连测试；真实 HDMI 拔插仍待有信号的现场验收。使用、兼容组合和验证边界见 [Receiver 接入](docs/streamhub/receiver-integration.md)，构建依赖见 [控制传输](docs/streamhub/control-transport.md) 和 [裁剪记录](docs/streamhub/slimming-core.md)。
 
 ## 开发与文档入口
 
