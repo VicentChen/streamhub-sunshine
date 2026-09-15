@@ -8,14 +8,17 @@
 
 Linux 构建通过 `sunshine-streamhub` 静态目标依赖公共 MIT `streamhub-protocal::protocol`，使用 C++23。源码为 `src/streamhub/transport.{h,cpp}`；不包含或链接 Provider 实现。适配代码属于本 GPL fork，protocol 的 MIT LICENSE 保留在其独立 checkout 中，并由 Linux 安装规则附带到 share/licenses/sunshine/streamhub-protocol-LICENSE。
 
-总仓库布局默认读取相邻 `../protocol`。独立 checkout 必须先取得公共协议仓库，并在原 Sunshine CMake 配置中传入：
+总仓库布局默认读取相邻 `protocol/`。从总仓库根目录构建时使用产品隔离入口：
 
 ```sh
-cmake -S . -B cmake-build-protocol \
-  -DSTREAMHUB_PROTOCOL_SOURCE_DIR=/absolute/path/to/streamhub-protocal \
+python3 tools/run.py --development -- cmake -S sunshine -B build/cmake-build-sunshine \
+  -DSTREAMHUB_PROTOCOL_SOURCE_DIR="$PWD/protocol" \
   -DBUILD_TESTS=ON
-cmake --build cmake-build-protocol --target sunshine test_sunshine test_streamhub_transport --parallel 3
+python3 tools/run.py --development -- cmake --build build/cmake-build-sunshine \
+  --target sunshine test_sunshine test_streamhub_transport --parallel 3
 ```
+
+独立 Sunshine checkout 必须先取得公共协议仓库，并在 CMake 配置中用 `STREAMHUB_PROTOCOL_SOURCE_DIR` 传入其绝对路径。
 
 其余依赖沿用 [裁剪后的依赖](slimming-core.md#依赖与授权)。缺少协议头文件时配置立即报告如何初始化 submodule 或传入路径。非 Linux 不构建或链接此适配目标；未执行非 Linux 构建验证。
 
@@ -24,7 +27,7 @@ cmake --build cmake-build-protocol --target sunshine test_sunshine test_streamhu
 `streamhub_socket` 在配置文件及 Web General 页提供。默认空，表示未配置；显式路径必须为绝对 Linux 文件系统路径，不能含 NUL，且必须放得进 `sockaddr_un.sun_path`。不会展开环境变量或 `~`。例如：
 
 ```ini
-streamhub_socket = /run/user/1000/streamhub/control.sock
+streamhub_socket = /absolute/product/root/var/run/control.sock
 ```
 
 输入目录组件在启动时使用该配置建立连接。传输类本身接收显式路径，不读取全局配置。
@@ -40,13 +43,15 @@ streamhub_socket = /run/user/1000/streamhub/control.sock
 仅控制传输、无 HDMI 或 Provider 依赖的快速测试：
 
 ```sh
-ctest --test-dir cmake-build-protocol/tests -R '^streamhub-transport$' --output-on-failure
+python3 tools/run.py --development -- ctest --test-dir build/cmake-build-sunshine/tests \
+  -R '^streamhub-transport$' --output-on-failure
 ```
 
 带配置解析和原有回归的隔离入口：
 
 ```sh
-python3 tests/run-streamhub-tests.py --build cmake-build-protocol --regression
+python3 tools/run.py --development -- python3 sunshine/tests/run-streamhub-tests.py \
+  --build build/cmake-build-sunshine --regression
 ```
 
 该入口使用临时 HOME、配置及覆盖率目录；传输测试上限 30 秒，含回归上限 60 秒，XML 输出到构建目录。需要特殊动态库搜索路径的开发环境在调用前自行设置 LD_LIBRARY_PATH。板端现有环境见 [托盘记录](slimming-tray.md#本机验证环境)。

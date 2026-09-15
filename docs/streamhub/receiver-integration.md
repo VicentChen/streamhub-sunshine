@@ -9,7 +9,7 @@ Sunshine 已接通 protocol v0.2 输入目录、精确协商、资源握手、�
 按 [构建说明](control-transport.md) 构建 Sunshine，并按 [Provider 文档](../../../streamhub/README.md) 构建独立软件。启动顺序不强制；Sunshine 会重新连接离线 Provider。
 
 ```ini
-streamhub_socket = /run/user/1000/streamhub/control.sock
+streamhub_socket = /absolute/product/root/var/run/control.sock
 streamhub_codecs = h264,hevc
 ```
 
@@ -50,8 +50,10 @@ Moonlight 的音频 UDP 接收缓冲为 1400 字节，包含 RTP／FEC 头。Opu
 普通自动测试使用假 Provider、临时 HOME、临时 socket、隔离证书和回环 TCP：
 
 ```sh
-cmake --build cmake-build-slimming-baseline --target sunshine test_sunshine test_streamhub_transport streamhub-receiver-smoke --parallel 3
-python3 tests/run-streamhub-tests.py --build cmake-build-slimming-baseline --regression
+python3 tools/run.py --development -- cmake --build build/cmake-build-sunshine \
+  --target sunshine test_sunshine test_streamhub_transport streamhub-receiver-smoke --parallel 3
+python3 tools/run.py --development -- python3 sunshine/tests/run-streamhub-tests.py \
+  --build build/cmake-build-sunshine --regression
 ```
 
 特殊开发工具链可给脚本传 `--runtime-library-path PATH`，只影响被测子进程。不要把 Homebrew glibc 的 LD_LIBRARY_PATH 导出给系统 shell、Python 或构建器。
@@ -59,17 +61,19 @@ python3 tests/run-streamhub-tests.py --build cmake-build-slimming-baseline --reg
 真实 DMA 接收冒烟测试（有限 120 帧）：
 
 ```sh
-cmake-build-slimming-baseline/tests/streamhub-receiver-smoke /absolute/provider.sock h264
-cmake-build-slimming-baseline/tests/streamhub-receiver-smoke /absolute/provider.sock hevc
+python3 tools/run.py --development -- build/cmake-build-sunshine/tests/streamhub-receiver-smoke \
+  "$PWD/var/run/control.sock" h264
+python3 tools/run.py --development -- build/cmake-build-sunshine/tests/streamhub-receiver-smoke \
+  "$PWD/var/run/control.sock" hevc
 ```
 
 隔离启动两进程进行 Moonlight 测试：
 
 ```sh
-python3 tests/run-streamhub-integration.py \
-  --build cmake-build-slimming-baseline \
-  --provider /absolute/path/to/streamhub \
-  --state /tmp/streamhub-acceptance \
+python3 tools/run.py --development -- python3 sunshine/tests/run-streamhub-integration.py \
+  --build build/cmake-build-sunshine \
+  --provider build/streamhub/streamhub \
+  --state "$PWD/var/tests/streamhub-acceptance" \
   --source test-cycle --port 49089 --seconds 120
 ```
 
